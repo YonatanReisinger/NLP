@@ -27,11 +27,6 @@ class ClozeSolver:
         self.ngrams = {n: Counter() for n in range(2, max_ngram_order + 1)}
         self.unigrams = Counter()
 
-    def train(self):
-        # TODO: delete _load_ngram_counts function and use only _init_ngram_counts as cant submit the pickle files
-        self._load_ngram_counts()
-        # self._init_ngram_counts()
-
     def _get_candidates_words(self) -> List[str]:
         with open(self.candidates_filename, 'r', encoding='utf-8') as candidates_file:
             return candidates_file.read().splitlines()
@@ -79,6 +74,49 @@ class ClozeSolver:
                     context[f'after{i}'].append(None)
 
         return context
+
+    def train(self):
+        # TODO: delete _load_ngram_counts function and use only _init_ngram_counts as cant submit the pickle files
+        self._load_ngram_counts()
+        # self._init_ngram_counts()
+
+    def solve_cloze(self) -> List[str]:
+        """Solve the cloze by finding the best candidate for each blank."""
+        with open(self.input_filename, 'r', encoding='utf-8') as input_file:
+            text = input_file.read()
+
+        # Find all blank positions
+        blank_pattern = re.compile(r'_{10,}')
+        blanks = []
+        for match in blank_pattern.finditer(text):
+            blanks.append(match.start())
+
+        solution = []
+
+        for blank_pos in blanks:
+            left_context, right_context = self._get_context(text, blank_pos)
+
+            best_candidate = None
+            best_score = float('-inf')
+
+            # Score each candidate
+            for candidate in self.candidates_words:
+                score = self._score_candidate(candidate, left_context, right_context)
+                if score > best_score:
+                    best_score = score
+                    best_candidate = candidate
+
+            # If no good match found, use first candidate as fallback
+            if best_candidate is None:
+                best_candidate = self.candidates_words[0] if self.candidates_words else ""
+
+            solution.append(best_candidate)
+            print(f'Blank at position {blank_pos}: selected "{best_candidate}" (score: {best_score:.6f})')
+
+        return solution
+
+    def solve_cloze_randomly(self) -> List[str]:
+        return random.choices(self.candidates_words, k=len(self.candidates_words))
 
     def _load_ngram_counts(self):
         pickle_files = {n: f'{n}grams.pkl' for n in range(2, self.max_ngram_order + 1)}
@@ -181,6 +219,19 @@ class ClozeSolver:
 
         return left_context, right_context
 
+    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str]) -> float:
+        """Score a candidate using all n-gram models, with higher weights for higher-order n-grams."""
+        combined_score = 0.0
+
+        # Score with each n-gram order, with increasing weights
+        for n in range(2, self.max_ngram_order + 1):
+            ngram_score = self._score_candidate_ngram(candidate, left_context, right_context, n)
+            # Higher-order n-grams get exponentially higher weights
+            weight = (n - 1) ** 2  # 1, 4, 9, 16 for bigrams, trigrams, 4-grams, 5-grams
+            combined_score += weight * ngram_score
+
+        return combined_score
+
     def _score_candidate_ngram(self, candidate: str, left_context: List[str], right_context: List[str],
                                n: int) -> float:
         """Score a candidate word using n-gram model of order n."""
@@ -226,57 +277,6 @@ class ClozeSolver:
             score += self._score_candidate_ngram(candidate, left_context, right_context, n - 1)
 
         return score
-
-    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str]) -> float:
-        """Score a candidate using all n-gram models, with higher weights for higher-order n-grams."""
-        combined_score = 0.0
-
-        # Score with each n-gram order, with increasing weights
-        for n in range(2, self.max_ngram_order + 1):
-            ngram_score = self._score_candidate_ngram(candidate, left_context, right_context, n)
-            # Higher-order n-grams get exponentially higher weights
-            weight = (n - 1) ** 2  # 1, 4, 9, 16 for bigrams, trigrams, 4-grams, 5-grams
-            combined_score += weight * ngram_score
-
-        return combined_score
-
-    def solve_cloze(self) -> List[str]:
-        """Solve the cloze by finding the best candidate for each blank."""
-        with open(self.input_filename, 'r', encoding='utf-8') as input_file:
-            text = input_file.read()
-
-        # Find all blank positions
-        blank_pattern = re.compile(r'_{10,}')
-        blanks = []
-        for match in blank_pattern.finditer(text):
-            blanks.append(match.start())
-
-        solution = []
-
-        for blank_pos in blanks:
-            left_context, right_context = self._get_context(text, blank_pos)
-
-            best_candidate = None
-            best_score = float('-inf')
-
-            # Score each candidate
-            for candidate in self.candidates_words:
-                score = self._score_candidate(candidate, left_context, right_context)
-                if score > best_score:
-                    best_score = score
-                    best_candidate = candidate
-
-            # If no good match found, use first candidate as fallback
-            if best_candidate is None:
-                best_candidate = self.candidates_words[0] if self.candidates_words else ""
-
-            solution.append(best_candidate)
-            print(f'Blank at position {blank_pos}: selected "{best_candidate}" (score: {best_score:.6f})')
-
-        return solution
-
-    def solve_cloze_randomly(self) -> List[str]:
-        return random.choices(self.candidates_words, k=len(self.candidates_words))
 
     def get_random_word_selection_accuracy(self, num_of_random_solutions: int = 1000) -> float:
         """

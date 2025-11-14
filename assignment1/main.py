@@ -12,6 +12,7 @@ def solve_cloze(input, candidates, corpus, left_only):
     solution =  solver.solve_cloze()
     accuracy = solver.calculate_solution_accuracy(solution)
     print(f'cloze solved with accuracy: {accuracy:.2f}%')
+    print(f'solving this cloze randomly would give an accuracy of: {solver.get_random_word_selection_accuracy():.2f}%')
     return solution
 
 

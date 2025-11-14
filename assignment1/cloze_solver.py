@@ -2,7 +2,6 @@ from typing import List, Tuple
 import re
 import os
 import pickle
-from collections import defaultdict
 from collections import Counter
 import random
 
@@ -132,17 +131,19 @@ class ClozeSolver:
                         self.bigrams[(w1, w2)] += count
 
                 # Count trigrams once
-                if len(words) >= 3:
-                    triple_counts = Counter(zip(words, words[1:], words[2:]))
+                if len(words) < 3:
+                    continue
 
-                    # Loop only over trigrams that actually appear
-                    for (w1, w2, w3), count in triple_counts.items():
-                        # Pattern 1: word_before2 → word_before → candidate
-                        if w1 in word_before2_set and w2 in word_before_set and w3 in candidates_words_set:
-                            self.trigrams[(w1, w2, w3)] += count
-                        # Pattern 2: candidate → word_after → word_after2
-                        elif not self.left_only and w1 in candidates_words_set and w2 in word_after_set and w3 in word_after2_set:
-                            self.trigrams[(w1, w2, w3)] += count
+                triple_counts = Counter(zip(words, words[1:], words[2:]))
+
+                # Loop only over trigrams that actually appear
+                for (w1, w2, w3), count in triple_counts.items():
+                    # Pattern 1: word_before2 → word_before → candidate
+                    if w1 in word_before2_set and w2 in word_before_set and w3 in candidates_words_set:
+                        self.trigrams[(w1, w2, w3)] += count
+                    # Pattern 2: candidate → word_after → word_after2
+                    elif not self.left_only and w1 in candidates_words_set and w2 in word_after_set and w3 in word_after2_set:
+                        self.trigrams[(w1, w2, w3)] += count
 
                 if i % 100000 == 0:
                     print(f"Finished {i} lines...")
@@ -289,7 +290,26 @@ class ClozeSolver:
         return solution
 
     def solve_cloze_randomly(self) -> List[str]:
-        return random.sample(self.candidates_words, len(self.candidates_words))
+        return random.choices(self.candidates_words, k=len(self.candidates_words))
+
+    def get_random_word_selection_accuracy(self, num_of_random_solutions: int = 1000) -> float:
+        """
+        Generates random cloze solutions and returns the mean accuracy.
+
+        Args:
+            num_of_random_solutions (int, optional): Number of random solutions to generate.
+                Defaults to 100.
+
+        Returns:
+            float: Mean accuracy (percentage) of random solutions.
+        """
+        accuracies = []
+        for _ in range(num_of_random_solutions):
+            random_solution = self.solve_cloze_randomly()
+            accuracy = self.calculate_solution_accuracy(random_solution)
+            accuracies.append(accuracy)
+
+        return sum(accuracies) / len(accuracies)
 
     def calculate_solution_accuracy(self, solution: List[str]):
         correct_order = self._get_candidates_words()

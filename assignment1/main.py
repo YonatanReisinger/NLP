@@ -1,12 +1,15 @@
 import json
 import time
-
+from assignment1.cloze_solver import ClozeSolver
 
 def solve_cloze(input, candidates, corpus, left_only):
-    # todo: implement this function
     print(f'starting to solve the cloze {input} with {candidates} using {corpus}')
-
-    return list()
+    solver = ClozeSolver(input_filename=input,
+                         candidates_filename=candidates,
+                         corpus_filename=corpus,
+                         left_only=left_only)
+    solutions =  solver.solve_cloze()
+    return solutions
 
 
 if __name__ == '__main__':

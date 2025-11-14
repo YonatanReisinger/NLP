@@ -23,7 +23,11 @@ class ClozeSolver:
         self.bigrams = Counter()
         self.trigrams = Counter()
         self.unigrams = Counter()
-        self._init_ngram_counts()
+
+    def train(self):
+        # TODO: delete _load_ngram_counts function and use only _init_ngram_counts as cant submit the pickle files
+        self._load_ngram_counts()
+        # self._init_ngram_counts()
 
     def _get_candidates_words(self) -> List[str]:
         with open(self.candidates_filename, 'r', encoding='utf-8') as candidates_file:
@@ -75,6 +79,29 @@ class ClozeSolver:
 
         return word_before, word_after, word_before2, word_after2
 
+    def _load_ngram_counts(self):
+        if not os.path.isfile('unigrams.pkl') or not os.path.isfile('bigrams.pkl') or not os.path.isfile('trigrams.pkl'):
+            self._init_ngram_counts()
+            print("\nsaving unigrams to file ...")
+            pickle.dump(self.unigrams, open('unigrams.pkl', 'wb'))
+            print("finished saving unigrams to file ...")
+            print("\nsaving bigrams to file ...")
+            pickle.dump(self.bigrams, open('bigrams.pkl', 'wb'))
+            print("finished saving bigrams to file ...")
+            print("\nsaving trigrams to file ...")
+            pickle.dump(self.trigrams, open('trigrams.pkl', 'wb'))
+            print("finished saving trigrams to file ...")
+        else:
+            print("\nloading unigrams pkl ...")
+            self.unigrams = pickle.load(open('unigrams.pkl', 'rb'))
+            print("loaded unigrams pkl ...")
+            print("\nloading bigrams pkl ...")
+            self.bigrams = pickle.load(open('bigrams.pkl', 'rb'))
+            print("loaded bigrams pkl ...")
+            print("\nloading trigrams pkl ...")
+            self.trigrams = pickle.load(open('trigrams.pkl', 'rb'))
+            print("loaded trigrams pkl ...")
+
     def _init_ngram_counts(self) -> None:
         word_before_set = set([w for w in self.word_before if w is not None])
         word_after_set = set([w for w in self.word_after if w is not None])
@@ -125,8 +152,7 @@ class ClozeSolver:
         # Regular expression to remove punctuation
         punctuation_re = re.compile(r'[^\w\s-]')
         clean_text = punctuation_re.sub('', text).lower()
-        words = clean_text.split()
-        return words
+        return clean_text.split()
 
     def _get_context(self, text: str, blank_pos: int) -> Tuple[List[str], List[str]]:
         """Extract left and right context around a blank position."""

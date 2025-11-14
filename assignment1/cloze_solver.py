@@ -17,7 +17,6 @@ class ClozeSolver:
         self.corpus_filename = corpus_filename
         self.candidates_words = self._get_candidates_words()
         self.words_before, self.words_after = self._get_target_words(input_filename)
-        self.bigram_filename = 'bigram.pkl'
         self.unigram_counts = None
         self.bigram_counts = defaultdict(Counter)
         self.bigram_probabilities = defaultdict(lambda: defaultdict(float))
@@ -51,14 +50,17 @@ class ClozeSolver:
     def _load_bigram(self):
         if self.bigram_probabilities and self.bigram_counts:
             return
-        if not os.path.isfile(self.bigram_filename):
+        # TODO: DELETE PICKLE LOADING FOR FINAL SUBMISSION
+        # TODO: DELETE PICKLE LOADING FOR FINAL SUBMISSION
+        # TODO: DELETE PICKLE LOADING FOR FINAL SUBMISSION
+        if not os.path.isfile('bigram.pkl'):
             self._init_bigram()
             print("\nsaving bigram to file ...")
-            pickle.dump(self.bigram_probabilities, open(self.bigram_filename, 'wb'))
+            pickle.dump(self.bigram_probabilities, open('bigram.pkl', 'wb'))
             print("finished saving bigram to file ...")
         else:
             print("\nloading bigram pkl ...")
-            self.bigram_probabilities = pickle.load(open(self.bigram_filename, 'rb'))
+            self.bigram_probabilities = pickle.load(open('bigram.pkl', 'rb'))
             print("loaded bigram pkl ...")
 
     def _init_bigram(self) -> None:

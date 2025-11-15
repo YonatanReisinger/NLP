@@ -2,6 +2,7 @@ from typing import List, Tuple, Set, Dict
 import re
 import os
 import pickle
+import math
 from collections import Counter
 import random
 from multiprocessing import Pool, cpu_count
@@ -26,6 +27,7 @@ class ClozeSolver:
         # Build n-gram models - dynamically create counters for each order
         self.ngrams = {n: Counter() for n in range(2, max_ngram_order + 1)}
         self.unigrams = Counter()
+        self.vocabulary_size = 0  # Will be set after training
 
     def _get_candidates_words(self) -> List[str]:
         with open(self.candidates_filename, 'r', encoding='utf-8') as candidates_file:
@@ -177,14 +179,14 @@ class ClozeSolver:
         return left_context, right_context
 
     def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str]) -> float:
-        """Score a candidate using all n-gram models, with higher weights for higher-order n-grams."""
+        """Score a candidate using all n-gram models with smoothing."""
         combined_score = 0.0
 
         # Score with each n-gram order, with increasing weights
         for n in range(2, self.max_ngram_order + 1):
             ngram_score = self._score_candidate_ngram(candidate, left_context, right_context, n)
             # Higher-order n-grams get exponentially higher weights
-            weight = (n - 1) ** 2  # 1, 4, 9, 16 for bigrams, trigrams, 4-grams, 5-grams
+            weight = (n - 1) ** 2
             combined_score += weight * ngram_score
 
         return combined_score
@@ -194,9 +196,12 @@ class ClozeSolver:
                                left_context: List[str],
                                right_context: List[str],
                                n: int) -> float:
-        """Score a candidate word using n-gram model of order n."""
+        """Score a candidate word using n-gram model of order n with Laplace smoothing."""
         candidate_lower = candidate.lower()
         score = 0.0
+        
+        # Laplace smoothing parameter (add-k smoothing)
+        smoothing_k = 0.00001
 
         # Left n-gram: (context_words..., candidate)
         if len(left_context) >= n - 1:
@@ -211,8 +216,13 @@ class ClozeSolver:
                 # For bigrams, use unigram count
                 prev_count = self.unigrams[left_context[-1]] if left_context else 0
 
+            # Apply Laplace smoothing: (count + k) / (prev_count + k * V)
             if prev_count > 0:
-                score += ngram_count / prev_count
+                smoothed_prob = (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
+                score += smoothed_prob
+            elif ngram_count > 0:
+                # Rare case: ngram exists but context doesn't
+                score += smoothing_k / (smoothing_k * self.vocabulary_size)
         # Fallback to lower-order n-gram
         elif len(left_context) >= 1 and n > 2:
             return self._score_candidate_ngram(candidate, left_context, right_context, n - 1)
@@ -230,8 +240,12 @@ class ClozeSolver:
                 # For bigrams, use unigram count
                 prev_count = self.unigrams[candidate_lower]
 
+            # Apply Laplace smoothing: (count + k) / (prev_count + k * V)
             if prev_count > 0:
-                score += ngram_count / prev_count
+                smoothed_prob = (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
+                score += smoothed_prob
+            elif ngram_count > 0:
+                score += smoothing_k / (smoothing_k * self.vocabulary_size)
         # Fallback to lower-order n-gram
         elif not self.left_only and len(right_context) >= 1 and n > 2:
             score += self._score_candidate_ngram(candidate, left_context, right_context, n - 1)
@@ -261,6 +275,10 @@ class ClozeSolver:
                 print(f"\nloading {n}grams pkl ...")
                 self.ngrams[n] = pickle.load(open(f'{n}grams.pkl', 'rb'))
                 print(f"loaded {n}grams pkl ...")
+            
+            # Cache vocabulary size and total unigrams for efficiency
+            self.vocabulary_size = max(len(self.unigrams), 1)  # Ensure at least 1
+            print(f"Vocabulary size: {self.vocabulary_size}")
 
     def _init_ngram_counts(self) -> None:
         """Initialize n-gram counts from corpus using multiprocessing for parallel processing."""
@@ -300,6 +318,10 @@ class ClozeSolver:
             self.unigrams.update(unigrams_chunk)
             for n in range(2, self.max_ngram_order + 1):
                 self.ngrams[n].update(ngrams_chunk[n])
+        
+        # Cache vocabulary size and total unigrams for efficiency
+        self.vocabulary_size = max(len(self.unigrams), 1)  # Ensure at least 1
+        print(f"Vocabulary size: {self.vocabulary_size}")
 
         print(f"Finished processing {len(lines)} lines")
 

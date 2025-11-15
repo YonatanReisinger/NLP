@@ -283,7 +283,6 @@ class ClozeSolver:
         chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
 
         print(f"Processing {len(lines)} lines in {len(chunks)} chunks using {num_workers} workers...")
-
         # Create a processor instance that can be pickled
         processor = NgramProcessor(
             context_sets,
@@ -291,7 +290,6 @@ class ClozeSolver:
             self.left_only,
             self.max_ngram_order
         )
-
         # Process chunks in parallel
         with Pool(processes=num_workers) as pool:
             results = pool.map(processor.process_chunk, enumerate(chunks))
@@ -363,10 +361,8 @@ class NgramProcessor:
 
         for i, line in enumerate(chunk):
             words = self._tokenize(line)
-
             # Count unigrams
             unigrams_chunk.update(words)
-
             # Count n-grams for each order
             for n in range(2, self.max_ngram_order + 1):
                 self._update_ngrams(words, n, ngrams_chunk)
@@ -393,7 +389,6 @@ class NgramProcessor:
         """
         if len(words) < n:
             return
-
         # Count n-grams once using Counter
         ngram_counts = Counter(zip(*[words[j:] for j in range(n)]))
 
@@ -402,7 +397,6 @@ class NgramProcessor:
             # Pattern 1: context_before → ... → candidate
             if self._matches_before_pattern(ngram_tuple, n):
                 ngrams_chunk[n][ngram_tuple] += count
-
             # Pattern 2: candidate → context_after → ... (only if not left_only)
             elif not self.left_only and self._matches_after_pattern(ngram_tuple, n):
                 ngrams_chunk[n][ngram_tuple] += count

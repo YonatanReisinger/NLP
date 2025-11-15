@@ -9,6 +9,18 @@ from multiprocessing import Pool, cpu_count
 
 
 class ClozeSolver:
+    """
+    Solves cloze tests using n-gram language models.
+
+    Trains n-gram models on a corpus by counting n-grams that match relevant patterns.
+    Uses Laplace smoothing and log probabilities for scoring candidates.
+
+    Main methods:
+    - train(): Train n-gram models from corpus
+    - solve_cloze(): Find best candidate for each blank
+    - calculate_solution_accuracy(): Evaluate solution accuracy
+    """
+
     def __init__(self,
                  input_filename: str,
                  candidates_filename: str,

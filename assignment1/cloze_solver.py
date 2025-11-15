@@ -5,7 +5,6 @@ from collections import Counter
 import random
 from multiprocessing import Pool, cpu_count
 
-#TODO: if multiprocessing fails, fall back to single process implementation
 #TODO: Move this class to main.py file as not allowed to submit multiple files
 class ClozeSolver:
     def __init__(self,
@@ -371,12 +370,11 @@ class ClozeSolver:
             lines = fin.readlines()
 
         # Determine number of workers
-        num_workers = cpu_count() or 4
-        chunk_size = max(10000, len(lines) // num_workers)
+        num_workers = cpu_count() or 1 # Fallback to 1 if cpu_count() returns None, thus init the ngrams sequentially
+        chunk_size = max(100000, len(lines) // num_workers)
         chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
 
         print(f"Processing {len(lines)} lines in {len(chunks)} chunks using {num_workers} workers...")
-        # Create a processor instance that can be pickled
         processor = NgramProcessor(
             context_sets,
             candidates_words_set,

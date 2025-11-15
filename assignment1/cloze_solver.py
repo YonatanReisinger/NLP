@@ -7,7 +7,6 @@ from collections import Counter
 import random
 from multiprocessing import Pool, cpu_count
 
-#TODO: add docstrings
 #TODO: Move this class to main.py file as not allowed to submit multiple files
 class ClozeSolver:
     def __init__(self,
@@ -16,7 +15,16 @@ class ClozeSolver:
                  corpus_filename: str,
                  left_only: bool,
                  max_ngram_order: int):
+        """
+        Initialize the ClozeSolver with input files and configuration.
 
+        Args:
+            input_filename: Path to the cloze document file containing blanks
+            candidates_filename: Path to the file containing candidate words
+            corpus_filename: Path to the corpus file for training n-gram models
+            left_only: If True, only use left context for scoring; if False, use both left and right context
+            max_ngram_order: Maximum order of n-grams to use
+        """
         self.input_filename = input_filename
         self.candidates_filename = candidates_filename
         self.corpus_filename = corpus_filename
@@ -30,22 +38,29 @@ class ClozeSolver:
         self.vocabulary_size = 0  # Will be set after training
 
     def _get_candidates_words(self) -> List[str]:
+        """
+        Read candidate words from the candidates file.
+
+        Returns:
+            List of candidate words, one per line from the file
+        """
         with open(self.candidates_filename, 'r', encoding='utf-8') as candidates_file:
             return candidates_file.read().splitlines()
 
     def _get_target_words(self) -> Dict[str, List[str]]:
         """
-        Extract context words around each blank. Returns dict with lists for each position.
-        
+        Extract context words around each blank from the input file.
+
         Returns:
-            dict: A dictionary with keys like 'before0', 'before1', 'after0', 'after1', etc.
-                  Each key maps to a list where each element corresponds to a blank position.
-                  - 'before0' contains the immediate word before each blank
-                  - 'before1' contains the second word before each blank
-                  - 'after0' contains the immediate word after each blank
-                  - 'after1' contains the second word after each blank
-                  - etc. for higher-order n-grams
-                  - if there is no word available at a position (e.g., blank at start/end of text), None is appended to maintain consistent list lengths.
+            Dict[str, List[str]]: A dictionary with keys like 'before0', 'before1', 'after0', 'after1', etc.
+                                  Each key maps to a list where each element corresponds to a blank position.
+                                  - 'before0' contains the immediate word before each blank
+                                  - 'before1' contains the second word before each blank
+                                  - 'after0' contains the immediate word after each blank
+                                  - 'after1' contains the second word after each blank
+                                  - etc. for higher-order n-grams
+                                  - if there is no word available at a position (e.g., blank at start/end of text), 
+                                    None is appended to maintain consistent list lengths.
         """
         context = {}
 
@@ -94,6 +109,9 @@ class ClozeSolver:
         return context
 
     def train(self):
+        """
+        Train the n-gram models by initializing n-gram counts from the corpus.
+        """
         # TODO: delete _load_ngram_counts function and use only _init_ngram_counts as cant submit the pickle files
         self._load_ngram_counts()
         # self._init_ngram_counts()
@@ -168,7 +186,17 @@ class ClozeSolver:
         return best_candidate, best_score
 
     def _get_context(self, text: str, blank_pos: int) -> Tuple[List[str], List[str]]:
-        """Extract left and right context around a blank position."""
+        """
+        Extract left and right context around a blank position.
+
+        Args:
+            text: The input text containing blanks
+            blank_pos: The start position of the blank in the text
+
+        Returns:
+            Tuple[List[str], List[str]]: A tuple containing (left_context, right_context)
+                                         where each is a list of words around the blank position
+        """
         text_before_blank = text[:blank_pos]
         words_before = self._tokenize(text_before_blank)
 
@@ -187,10 +215,25 @@ class ClozeSolver:
 
         return left_context, right_context
 
-    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str],
+    def _score_candidate(self,
+                         candidate: str,
+                         left_context: List[str],
+                         right_context: List[str],
                          smoothing_k: float) -> float:
         """
-        Score a candidate using all n-gram models with smoothing (using log probabilities).
+        Score a candidate word using all n-gram models with smoothing (using log probabilities).
+        
+        Combines scores from all n-gram orders (bigrams through max_ngram_order) with exponentially
+        increasing weights, where higher-order n-grams receive more weight.
+
+        Args:
+            candidate: The candidate word to score
+            left_context: List of words before the blank position
+            right_context: List of words after the blank position
+            smoothing_k: Laplace smoothing parameter for probability estimation
+
+        Returns:
+            float: Combined log score for the candidate (higher is better)
         """
         combined_log_score = float('-inf')  # Start with log(0) = -inf
 
@@ -212,7 +255,22 @@ class ClozeSolver:
                                right_context: List[str],
                                n: int,
                                smoothing_k: float) -> float:
-        """Score a candidate word using n-gram model of order n with Laplace smoothing (log probabilities)."""
+        """
+        Score a candidate word using n-gram model of order n with Laplace smoothing (log probabilities).
+        
+        Scores the candidate by checking both left and right n-gram contexts (if right context is enabled).
+        Falls back to lower-order n-grams if sufficient context is not available.
+
+        Args:
+            candidate: The candidate word to score
+            left_context: List of words before the blank position
+            right_context: List of words after the blank position
+            n: The order of the n-gram model to use
+            smoothing_k: Laplace smoothing parameter for probability estimation
+
+        Returns:
+            float: Log probability score for the candidate using n-grams of order n
+        """
         candidate_lower = candidate.lower()
         log_score = float('-inf')  # Start with log(0) = -inf
 
@@ -260,7 +318,6 @@ class ClozeSolver:
     def _add_log_probabilities(self, log_score: float, log_prob: float) -> float:
         """
         Add two log probabilities: log(exp(log_score) + exp(log_prob)).
-        Uses log-sum-exp trick for numerical stability.
 
         Args:
             log_score: Current log score (can be -inf)
@@ -296,6 +353,13 @@ class ClozeSolver:
         return math.log(smoothed_prob) if smoothed_prob > 0 else float('-inf')
 
     def _load_ngram_counts(self):
+        """
+        Load n-gram counts from pickle files if they exist, otherwise initialize them from corpus.
+        
+        Checks for existing pickle files containing pre-computed n-gram counts. If all files exist,
+        loads them. Otherwise, initializes n-gram counts from the corpus and saves them to pickle files.
+        Also sets the vocabulary_size attribute after loading or initializing.
+        """
         pickle_files = {n: f'{n}grams.pkl' for n in range(2, self.max_ngram_order + 1)}
         pickle_files['unigrams'] = 'unigrams.pkl'
 
@@ -324,7 +388,13 @@ class ClozeSolver:
             print(f"Vocabulary size: {self.vocabulary_size}")
 
     def _init_ngram_counts(self) -> None:
-        """Initialize n-gram counts from corpus using multiprocessing for parallel processing."""
+        """
+        Initialize n-gram counts from corpus using multiprocessing for parallel processing.
+        
+        Reads the corpus file, splits it into chunks, and processes each chunk in parallel
+        to count n-grams. Only counts n-grams that match the relevant patterns (context_before→candidate
+        or candidate→context_after). Merges results from all chunks and sets the vocabulary_size attribute.
+        """
         # Build sets for fast lookup
         context_sets = {}
         for key, word_list in self.context_words.items():
@@ -395,9 +465,24 @@ class ClozeSolver:
         return sum(accuracies) / len(accuracies)
 
     def solve_cloze_randomly(self) -> List[str]:
+        """
+        Generate a random solution by randomly selecting candidates for each blank.
+
+        Returns:
+            List[str]: List of randomly selected candidate words, one for each blank position
+        """
         return random.choices(self.candidates_words, k=len(self.candidates_words))
 
-    def calculate_solution_accuracy(self, solution: List[str]):
+    def calculate_solution_accuracy(self, solution: List[str]) -> float:
+        """
+        Calculate the accuracy of a solution by comparing it to the correct order.
+
+        Args:
+            solution: List of predicted candidate words for each blank position
+
+        Returns:
+            float: Accuracy percentage (0-100) of the solution
+        """
         correct_order = self.candidates_words # The correct order is the order in candidates file
         matches = sum(1 for prediction, correct in zip(solution, correct_order) if prediction == correct)
         return (matches / len(correct_order)) * 100
@@ -411,7 +496,15 @@ class NgramProcessor:
                  candidates_words_set: Set[str],
                  left_only: bool,
                  max_ngram_order: int):
+        """
+        Initialize the NgramProcessor for parallel processing of corpus chunks.
 
+        Args:
+            context_sets: Dictionary mapping context keys (e.g., 'before0', 'after1') to sets of context words
+            candidates_words_set: Set of candidate words (lowercase)
+            left_only: If True, only count n-grams matching the before→candidate pattern
+            max_ngram_order: Maximum order of n-grams to process
+        """
         self.context_sets = context_sets
         self.candidates_words_set = candidates_words_set
         self.left_only = left_only
@@ -419,7 +512,17 @@ class NgramProcessor:
         self.punctuation_re = re.compile(r'[^\w\s-]')
 
     def process_chunk(self, chunk_data: Tuple[int, List[str]])-> Tuple[Counter, Dict[int, Counter]]:
-        """Process a chunk of lines."""
+        """
+        Process a chunk of lines from the corpus to count unigrams and n-grams.
+
+        Args:
+            chunk_data: Tuple of (chunk_index, list_of_lines) where each line is a string from the corpus
+
+        Returns:
+            Tuple[Counter, Dict[int, Counter]]: A tuple containing:
+                - Counter of unigram counts
+                - Dictionary mapping n-gram order to Counter of n-gram counts
+        """
         chunk_idx, chunk = chunk_data
         unigrams_chunk = Counter()
         ngrams_chunk = {n: Counter() for n in range(2, self.max_ngram_order + 1)}
@@ -438,7 +541,15 @@ class NgramProcessor:
         return unigrams_chunk, ngrams_chunk
 
     def _tokenize(self, text: str) -> List[str]:
-        """Tokenize text into words, handling punctuation."""
+        """
+        Tokenize text into words, handling punctuation.
+
+        Args:
+            text: The input text to tokenize
+
+        Returns:
+            List[str]: List of lowercase words with punctuation removed
+        """
         clean_text = self.punctuation_re.sub('', text).lower()
         return clean_text.split()
 
@@ -467,7 +578,17 @@ class NgramProcessor:
                 ngrams_chunk[n][ngram_tuple] += count
 
     def _matches_before_pattern(self, ngram_tuple: tuple, n: int) -> bool:
-        """Check if an n-gram matches pattern 1: context_before → ... → candidate."""
+        """
+        Check if an n-gram matches pattern 1: context_before → ... → candidate.
+
+        Args:
+            ngram_tuple: The n-gram tuple to check
+            n: The order of the n-gram
+
+        Returns:
+            bool: True if the n-gram matches the pattern where the first (n-1) words match
+                  context_before patterns and the last word is a candidate word
+        """
         for j in range(n - 1):
             context_key = f'before{j}'
             if ngram_tuple[j] not in self.context_sets.get(context_key, set()):
@@ -475,7 +596,17 @@ class NgramProcessor:
         return ngram_tuple[-1] in self.candidates_words_set
 
     def _matches_after_pattern(self, ngram_tuple: tuple, n: int) -> bool:
-        """Check if an n-gram matches pattern 2: candidate → context_after → ..."""
+        """
+        Check if an n-gram matches pattern 2: candidate → context_after → ...
+
+        Args:
+            ngram_tuple: The n-gram tuple to check
+            n: The order of the n-gram
+
+        Returns:
+            bool: True if the n-gram matches the pattern where the first word is a candidate
+                  and the remaining words match context_after patterns
+        """
         if ngram_tuple[0] not in self.candidates_words_set:
             return False
         for j in range(1, n):

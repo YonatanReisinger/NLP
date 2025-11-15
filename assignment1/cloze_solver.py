@@ -1,12 +1,11 @@
 from typing import List, Tuple, Set, Dict
 import re
-import os
-import pickle
 import math
 from collections import Counter
 import random
 from multiprocessing import Pool, cpu_count
 
+#TODO: if multiprocessing fails, fall back to single process implementation
 #TODO: Move this class to main.py file as not allowed to submit multiple files
 class ClozeSolver:
     def __init__(self,
@@ -112,9 +111,7 @@ class ClozeSolver:
         """
         Train the n-gram models by initializing n-gram counts from the corpus.
         """
-        # TODO: delete _load_ngram_counts function and use only _init_ngram_counts as cant submit the pickle files
-        self._load_ngram_counts()
-        # self._init_ngram_counts()
+        self._init_ngram_counts()
 
     def solve_cloze(self, smoothing_k: float) -> List[str]:
         """
@@ -351,39 +348,6 @@ class ClozeSolver:
         # Return log probability for numerical stability
         return math.log(smoothed_prob) if smoothed_prob > 0 else float('-inf')
 
-    def _load_ngram_counts(self):
-        """
-        Load n-gram counts from pickle files if they exist, otherwise initialize them from corpus.
-        
-        Checks for existing pickle files containing pre-computed n-gram counts. If all files exist,
-        loads them. Otherwise, initializes n-gram counts from the corpus and saves them to pickle files.
-        Also sets the vocabulary_size attribute after loading or initializing.
-        """
-        pickle_files = {n: f'{n}grams.pkl' for n in range(2, self.max_ngram_order + 1)}
-        pickle_files['unigrams'] = 'unigrams.pkl'
-
-        all_exist = all(os.path.isfile(f) for f in pickle_files.values())
-
-        if not all_exist:
-            self._init_ngram_counts()
-            print("\nsaving unigrams to file ...")
-            pickle.dump(self.unigrams, open('unigrams.pkl', 'wb'))
-            print("finished saving unigrams to file ...")
-            for n in range(2, self.max_ngram_order + 1):
-                print(f"\nsaving {n}grams to file ...")
-                pickle.dump(self.ngrams[n], open(f'{n}grams.pkl', 'wb'))
-                print(f"finished saving {n}grams to file ...")
-        else:
-            print("\nloading unigrams pkl ...")
-            self.unigrams = pickle.load(open('unigrams.pkl', 'rb'))
-            print("loaded unigrams pkl ...")
-            for n in range(2, self.max_ngram_order + 1):
-                print(f"\nloading {n}grams pkl ...")
-                self.ngrams[n] = pickle.load(open(f'{n}grams.pkl', 'rb'))
-                print(f"loaded {n}grams pkl ...")
-
-            self.vocabulary_size = max(len(self.unigrams), 1)  # Ensure at least 1
-
     def _init_ngram_counts(self) -> None:
         """
         Initialize n-gram counts from corpus using multiprocessing for parallel processing.
@@ -429,9 +393,7 @@ class ClozeSolver:
             for n in range(2, self.max_ngram_order + 1):
                 self.ngrams[n].update(ngrams_chunk[n])
         
-        # Cache vocabulary size and total unigrams for efficiency
         self.vocabulary_size = max(len(self.unigrams), 1)  # Ensure at least 1
-        print(f"Vocabulary size: {self.vocabulary_size}")
 
         print(f"Finished processing {len(lines)} lines")
 

@@ -187,43 +187,24 @@ class ClozeSolver:
 
         return left_context, right_context
 
-    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str], smoothing_k: float) -> float:
+    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str],
+                         smoothing_k: float) -> float:
         """
-        Score a candidate using all n-gram models with smoothing.
-        
-        Args:
-            candidate: The candidate word to score
-            left_context: Words before the blank
-            right_context: Words after the blank
-            smoothing_k: Laplace smoothing parameter
-        
-        Returns:
-            Combined score for the candidate
+        Score a candidate using all n-gram models with smoothing (using log probabilities).
         """
-        combined_score = 0.0
+        combined_log_score = float('-inf')  # Start with log(0) = -inf
 
         # Score with each n-gram order, with increasing weights
         for n in range(2, self.max_ngram_order + 1):
-            ngram_score = self._score_candidate_ngram(candidate, left_context, right_context, n, smoothing_k)
-            # Higher-order n-grams get exponentially higher weights as they are more informative
+            ngram_log_score = self._score_candidate_ngram(candidate, left_context, right_context, n, smoothing_k)
+            if ngram_log_score == float('-inf'): # No valid n-gram found, skip
+                continue
+            # Higher-order n-grams get exponentially higher weights
             weight = (n - 1) ** 2
-            combined_score += weight * ngram_score
+            weighted_log_score = math.log(weight) + ngram_log_score
+            combined_log_score = self._add_log_probabilities(combined_log_score, weighted_log_score)
 
-        return combined_score
-
-    def _calculate_smoothed_probability(self, ngram_count: int, prev_count: int, smoothing_k: float) -> float:
-        """
-        Calculate smoothed probability using Laplace smoothing.
-        
-        Args:
-            ngram_count: Count of the n-gram
-            prev_count: Count of the (n-1)-gram context
-            smoothing_k: Laplace smoothing parameter
-        
-        Returns:
-            Smoothed probability: (count + k) / (prev_count + k * V)
-        """
-        return (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
+        return combined_log_score
 
     def _score_candidate_ngram(self,
                                candidate: str,
@@ -231,9 +212,9 @@ class ClozeSolver:
                                right_context: List[str],
                                n: int,
                                smoothing_k: float) -> float:
-        """Score a candidate word using n-gram model of order n with Laplace smoothing."""
+        """Score a candidate word using n-gram model of order n with Laplace smoothing (log probabilities)."""
         candidate_lower = candidate.lower()
-        score = 0.0
+        log_score = float('-inf')  # Start with log(0) = -inf
 
         # Left n-gram: (context_words..., candidate)
         if len(left_context) >= n - 1:
@@ -248,7 +229,8 @@ class ClozeSolver:
                 # For bigrams, use unigram count
                 prev_count = self.unigrams[left_context[-1]] if left_context else 0
 
-            score += self._calculate_smoothed_probability(ngram_count, prev_count, smoothing_k)
+            log_prob = self._calculate_smoothed_probability(ngram_count, prev_count, smoothing_k)
+            log_score = self._add_log_probabilities(log_score, log_prob)
         # Fallback to lower-order n-gram
         elif len(left_context) >= 1 and n > 2:
             return self._score_candidate_ngram(candidate, left_context, right_context, n - 1, smoothing_k)
@@ -266,12 +248,52 @@ class ClozeSolver:
                 # For bigrams, use unigram count
                 prev_count = self.unigrams[candidate_lower]
 
-            score += self._calculate_smoothed_probability(ngram_count, prev_count, smoothing_k)
+            log_prob = self._calculate_smoothed_probability(ngram_count, prev_count, smoothing_k)
+            log_score = self._add_log_probabilities(log_score, log_prob)
         # Fallback to lower-order n-gram
         elif not self.left_only and len(right_context) >= 1 and n > 2:
-            score += self._score_candidate_ngram(candidate, left_context, right_context, n - 1, smoothing_k)
+            lower_log_score = self._score_candidate_ngram(candidate, left_context, right_context, n - 1, smoothing_k)
+            log_score = self._add_log_probabilities(log_score, lower_log_score)
 
-        return score
+        return log_score
+
+    def _add_log_probabilities(self, log_score: float, log_prob: float) -> float:
+        """
+        Add two log probabilities: log(exp(log_score) + exp(log_prob)).
+        Uses log-sum-exp trick for numerical stability.
+
+        Args:
+            log_score: Current log score (can be -inf)
+            log_prob: New log probability to add (can be -inf)
+
+        Returns:
+            log(exp(log_score) + exp(log_prob))
+        """
+        # If either is -inf, return the other (or -inf if both are -inf)
+        if log_score == float('-inf'):
+            return log_prob
+        if log_prob == float('-inf'):
+            return log_score
+
+        # Use log-sum-exp trick: log(a + b) = max(log_a, log_b) + log(1 + exp(min - max))
+        max_log = max(log_score, log_prob)
+        return max_log + math.log(1 + math.exp(min(log_score, log_prob) - max_log))
+
+    def _calculate_smoothed_probability(self, ngram_count: int, prev_count: int, smoothing_k: float) -> float:
+        """
+        Calculate smoothed log probability using Laplace smoothing.
+
+        Args:
+            ngram_count: Count of the n-gram
+            prev_count: Count of the (n-1)-gram context
+            smoothing_k: Laplace smoothing parameter
+
+        Returns:
+            Log of smoothed probability: log((count + k) / (prev_count + k * V))
+        """
+        smoothed_prob = (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
+        # Return log probability for numerical stability
+        return math.log(smoothed_prob) if smoothed_prob > 0 else float('-inf')
 
     def _load_ngram_counts(self):
         pickle_files = {n: f'{n}grams.pkl' for n in range(2, self.max_ngram_order + 1)}

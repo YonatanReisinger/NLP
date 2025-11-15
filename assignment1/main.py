@@ -417,7 +417,7 @@ class ClozeSolver:
         clean_text = punctuation_re.sub('', text).lower()
         return clean_text.split()
 
-    def get_random_word_selection_accuracy(self, num_of_random_solutions) -> float:
+    def get_random_word_selection_accuracy(self, num_of_random_solutions: int) -> float:
         """
         Generates random cloze solutions and returns the mean accuracy.
 
@@ -433,7 +433,7 @@ class ClozeSolver:
             accuracy = self.calculate_solution_accuracy(random_solution)
             accuracies.append(accuracy)
 
-        return sum(accuracies) / len(accuracies)
+        return sum(accuracies) / len(accuracies) if accuracies else 0.0
 
     def solve_cloze_randomly(self) -> List[str]:
         """

@@ -98,8 +98,16 @@ class ClozeSolver:
         self._load_ngram_counts()
         # self._init_ngram_counts()
 
-    def solve_cloze(self) -> List[str]:
-        """Solve the cloze by finding the best candidate for each blank."""
+    def solve_cloze(self, smoothing_k: float) -> List[str]:
+        """
+        Solve the cloze by finding the best candidate for each blank.
+        
+        Args:
+            smoothing_k: Laplace smoothing parameter for scoring (add-k smoothing).
+        
+        Returns:
+            List of candidate words for each blank position.
+        """
         with open(self.input_filename, 'r', encoding='utf-8') as input_file:
             text = input_file.read()
 
@@ -107,7 +115,7 @@ class ClozeSolver:
         solution = []
 
         for blank_pos in blank_positions:
-            best_candidate, best_score = self._find_best_candidate_for_blank(text, blank_pos)
+            best_candidate, best_score = self._find_best_candidate_for_blank(text, blank_pos, smoothing_k)
             solution.append(best_candidate)
             print(f'Blank at position {blank_pos}: selected "{best_candidate}" (score: {best_score:.6f})')
 
@@ -129,13 +137,14 @@ class ClozeSolver:
             blanks.append(match.start())
         return blanks
 
-    def _find_best_candidate_for_blank(self, text: str, blank_pos: int) -> Tuple[str, float]:
+    def _find_best_candidate_for_blank(self, text: str, blank_pos: int, smoothing_k: float) -> Tuple[str, float]:
         """
         Find the best candidate word for a single blank position.
 
         Args:
             text: The input text containing blanks
             blank_pos: The start position of the blank
+            smoothing_k: Laplace smoothing parameter
 
         Returns:
             Tuple of (best_candidate_word, best_score)
@@ -147,7 +156,7 @@ class ClozeSolver:
 
         # Score each candidate
         for candidate in self.candidates_words:
-            score = self._score_candidate(candidate, left_context, right_context)
+            score = self._score_candidate(candidate, left_context, right_context, smoothing_k)
             if score > best_score:
                 best_score = score
                 best_candidate = candidate
@@ -178,30 +187,53 @@ class ClozeSolver:
 
         return left_context, right_context
 
-    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str]) -> float:
-        """Score a candidate using all n-gram models with smoothing."""
+    def _score_candidate(self, candidate: str, left_context: List[str], right_context: List[str], smoothing_k: float) -> float:
+        """
+        Score a candidate using all n-gram models with smoothing.
+        
+        Args:
+            candidate: The candidate word to score
+            left_context: Words before the blank
+            right_context: Words after the blank
+            smoothing_k: Laplace smoothing parameter
+        
+        Returns:
+            Combined score for the candidate
+        """
         combined_score = 0.0
 
         # Score with each n-gram order, with increasing weights
         for n in range(2, self.max_ngram_order + 1):
-            ngram_score = self._score_candidate_ngram(candidate, left_context, right_context, n)
-            # Higher-order n-grams get exponentially higher weights
+            ngram_score = self._score_candidate_ngram(candidate, left_context, right_context, n, smoothing_k)
+            # Higher-order n-grams get exponentially higher weights as they are more informative
             weight = (n - 1) ** 2
             combined_score += weight * ngram_score
 
         return combined_score
 
+    def _calculate_smoothed_probability(self, ngram_count: int, prev_count: int, smoothing_k: float) -> float:
+        """
+        Calculate smoothed probability using Laplace smoothing.
+        
+        Args:
+            ngram_count: Count of the n-gram
+            prev_count: Count of the (n-1)-gram context
+            smoothing_k: Laplace smoothing parameter
+        
+        Returns:
+            Smoothed probability: (count + k) / (prev_count + k * V)
+        """
+        return (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
+
     def _score_candidate_ngram(self,
                                candidate: str,
                                left_context: List[str],
                                right_context: List[str],
-                               n: int) -> float:
+                               n: int,
+                               smoothing_k: float) -> float:
         """Score a candidate word using n-gram model of order n with Laplace smoothing."""
         candidate_lower = candidate.lower()
         score = 0.0
-        
-        # Laplace smoothing parameter (add-k smoothing)
-        smoothing_k = 0.00001
 
         # Left n-gram: (context_words..., candidate)
         if len(left_context) >= n - 1:
@@ -216,16 +248,10 @@ class ClozeSolver:
                 # For bigrams, use unigram count
                 prev_count = self.unigrams[left_context[-1]] if left_context else 0
 
-            # Apply Laplace smoothing: (count + k) / (prev_count + k * V)
-            if prev_count > 0:
-                smoothed_prob = (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
-                score += smoothed_prob
-            elif ngram_count > 0:
-                # Rare case: ngram exists but context doesn't
-                score += smoothing_k / (smoothing_k * self.vocabulary_size)
+            score += self._calculate_smoothed_probability(ngram_count, prev_count, smoothing_k)
         # Fallback to lower-order n-gram
         elif len(left_context) >= 1 and n > 2:
-            return self._score_candidate_ngram(candidate, left_context, right_context, n - 1)
+            return self._score_candidate_ngram(candidate, left_context, right_context, n - 1, smoothing_k)
 
         # Right n-gram: (candidate, context_words...) - only if not left_only
         if not self.left_only and len(right_context) >= n - 1:
@@ -240,15 +266,10 @@ class ClozeSolver:
                 # For bigrams, use unigram count
                 prev_count = self.unigrams[candidate_lower]
 
-            # Apply Laplace smoothing: (count + k) / (prev_count + k * V)
-            if prev_count > 0:
-                smoothed_prob = (ngram_count + smoothing_k) / (prev_count + smoothing_k * self.vocabulary_size)
-                score += smoothed_prob
-            elif ngram_count > 0:
-                score += smoothing_k / (smoothing_k * self.vocabulary_size)
+            score += self._calculate_smoothed_probability(ngram_count, prev_count, smoothing_k)
         # Fallback to lower-order n-gram
         elif not self.left_only and len(right_context) >= 1 and n > 2:
-            score += self._score_candidate_ngram(candidate, left_context, right_context, n - 1)
+            score += self._score_candidate_ngram(candidate, left_context, right_context, n - 1, smoothing_k)
 
         return score
 

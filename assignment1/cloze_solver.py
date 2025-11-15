@@ -22,7 +22,8 @@ class ClozeSolver:
             candidates_filename: Path to the file containing candidate words
             corpus_filename: Path to the corpus file for training n-gram models
             left_only: If True, only use left context for scoring; if False, use both left and right context
-            max_ngram_order: Maximum order of n-grams to use
+            max_ngram_order: Maximum order of n-grams to use.
+                Used it as a parameter for experimenting with different n-gram sizes and to see their effect on the accuracy.
         """
         self.input_filename = input_filename
         self.candidates_filename = candidates_filename

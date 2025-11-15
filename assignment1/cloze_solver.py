@@ -135,7 +135,6 @@ class ClozeSolver:
         for blank_pos in blank_positions:
             best_candidate, best_score = self._find_best_candidate_for_blank(text, blank_pos, smoothing_k)
             solution.append(best_candidate)
-            print(f'Blank at position {blank_pos}: selected "{best_candidate}" (score: {best_score:.6f})')
 
         return solution
 
@@ -382,10 +381,8 @@ class ClozeSolver:
                 print(f"\nloading {n}grams pkl ...")
                 self.ngrams[n] = pickle.load(open(f'{n}grams.pkl', 'rb'))
                 print(f"loaded {n}grams pkl ...")
-            
-            # Cache vocabulary size and total unigrams for efficiency
+
             self.vocabulary_size = max(len(self.unigrams), 1)  # Ensure at least 1
-            print(f"Vocabulary size: {self.vocabulary_size}")
 
     def _init_ngram_counts(self) -> None:
         """
@@ -445,13 +442,12 @@ class ClozeSolver:
         clean_text = punctuation_re.sub('', text).lower()
         return clean_text.split()
 
-    def get_random_word_selection_accuracy(self, num_of_random_solutions: int = 1000) -> float:
+    def get_random_word_selection_accuracy(self, num_of_random_solutions) -> float:
         """
         Generates random cloze solutions and returns the mean accuracy.
 
         Args:
-            num_of_random_solutions (int, optional): Number of random solutions to generate.
-                Defaults to 100.
+            num_of_random_solutions (int): Number of random solutions to generate.
 
         Returns:
             float: Mean accuracy (percentage) of random solutions.

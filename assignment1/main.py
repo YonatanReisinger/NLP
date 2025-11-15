@@ -9,11 +9,15 @@ def solve_cloze(input, candidates, corpus, left_only):
                          corpus_filename=corpus,
                          left_only=left_only,
                          max_ngram_order=5)
+
+    num_of_random_solutions = 1000
+    print(f'solving this cloze randomly over {num_of_random_solutions} solutions would give an accuracy of: '
+          f'{solver.get_random_word_selection_accuracy(num_of_random_solutions):.2f}%')
+
     solver.train()
     solution =  solver.solve_cloze(smoothing_k=0.00001)
     accuracy = solver.calculate_solution_accuracy(solution)
     print(f'cloze solved with accuracy: {accuracy:.2f}%')
-    print(f'solving this cloze randomly would give an accuracy of: {solver.get_random_word_selection_accuracy():.2f}%')
     return solution
 
 

@@ -4,7 +4,7 @@ import os
 import pickle
 from collections import Counter
 import random
-
+from multiprocessing import Pool, cpu_count
 
 #TODO: add docstrings
 #TODO: Move this class to main.py file as not allowed to submit multiple files
@@ -262,29 +262,48 @@ class ClozeSolver:
                 self.ngrams[n] = pickle.load(open(f'{n}grams.pkl', 'rb'))
                 print(f"loaded {n}grams pkl ...")
 
-    # TODO: make the _init_ngram_counts function async to speed up the training process
     def _init_ngram_counts(self) -> None:
-        """Initialize n-gram counts from corpus, only counting relevant n-grams."""
+        """Initialize n-gram counts from corpus using multiprocessing for parallel processing."""
         # Build sets for fast lookup
-        self.context_sets: Dict[str, Set[str]] = {}
+        context_sets = {}
         for key, word_list in self.context_words.items():
             # Filter out None values which indicate missing context words
-            self.context_sets[key] = set([w for w in word_list if w is not None])
-        self.candidates_words_set = set([w.lower() for w in self.candidates_words])
+            context_sets[key] = set([w for w in word_list if w is not None])
+        candidates_words_set = set([w.lower() for w in self.candidates_words])
 
+        print(f'creating n-grams (up to {self.max_ngram_order}) from corpus using multiprocessing...')
+
+        # Read all lines
         with open(self.corpus_filename, 'r', encoding='utf-8') as fin:
-            print(f'creating n-grams (up to {self.max_ngram_order}) from corpus ...')
-            for i, line in enumerate(fin):
-                words = self._tokenize(line)
-                # Count unigrams
-                self.unigrams.update(words)
+            lines = fin.readlines()
 
-                # Count n-grams for each order
-                for n in range(2, self.max_ngram_order + 1):
-                    self._update_ngrams(words, n)
+        # Determine number of workers
+        num_workers = cpu_count() or 4
+        chunk_size = max(10000, len(lines) // num_workers)
+        chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
 
-                if i % 100000 == 0:
-                    print(f"Finished {i} lines...")
+        print(f"Processing {len(lines)} lines in {len(chunks)} chunks using {num_workers} workers...")
+
+        # Create a processor instance that can be pickled
+        processor = NgramProcessor(
+            context_sets,
+            candidates_words_set,
+            self.left_only,
+            self.max_ngram_order
+        )
+
+        # Process chunks in parallel
+        with Pool(processes=num_workers) as pool:
+            results = pool.map(processor.process_chunk, enumerate(chunks))
+
+        # Merge results from all chunks
+        print("Merging results from all chunks...")
+        for unigrams_chunk, ngrams_chunk in results:
+            self.unigrams.update(unigrams_chunk)
+            for n in range(2, self.max_ngram_order + 1):
+                self.ngrams[n].update(ngrams_chunk[n])
+
+        print(f"Finished processing {len(lines)} lines")
 
     def _tokenize(self, text: str) -> List[str]:
         """Tokenize text into words, handling punctuation."""
@@ -292,70 +311,6 @@ class ClozeSolver:
         punctuation_re = re.compile(r'[^\w\s-]')
         clean_text = punctuation_re.sub('', text).lower()
         return clean_text.split()
-
-    def _update_ngrams(self, words: List[str], n: int) -> None:
-        """
-        Process and count n-grams of order n for a line of text.
-        Only counts n-grams that match the relevant patterns (before→candidate or candidate→after).
-
-        Args:
-            words: Tokenized words from a line
-            n: The order of n-grams to process
-        """
-        if len(words) < n:
-            return
-
-        # Count n-grams once using Counter
-        ngram_counts = Counter(zip(*[words[j:] for j in range(n)]))
-
-        # Loop only over n-grams that actually appear
-        for ngram_tuple, count in ngram_counts.items():
-            # Pattern 1: context_before → ... → candidate
-            if self._matches_before_pattern(ngram_tuple, n):
-                self.ngrams[n][ngram_tuple] += count
-
-            # Pattern 2: candidate → context_after → ... (only if not left_only)
-            elif not self.left_only and self._matches_after_pattern(ngram_tuple, n):
-                self.ngrams[n][ngram_tuple] += count
-
-    def _matches_before_pattern(self, ngram_tuple: tuple, n: int) -> bool:
-        """
-        Check if an n-gram matches pattern 1: context_before → ... → candidate.
-
-        Args:
-            ngram_tuple: The n-gram tuple to check
-            n: The order of the n-gram
-
-        Returns:
-            bool: True if the n-gram matches the before pattern
-        """
-        # Check if first (n-1) words match context_before patterns and last word is candidate
-        for j in range(n - 1):
-            context_key = f'before{j}'
-            if ngram_tuple[j] not in self.context_sets.get(context_key, set()):
-                return False
-        return ngram_tuple[-1] in self.candidates_words_set
-
-    def _matches_after_pattern(self, ngram_tuple: tuple, n: int) -> bool:
-        """
-        Check if an n-gram matches pattern 2: candidate → context_after → ...
-
-        Args:
-            ngram_tuple: The n-gram tuple to check
-            n: The order of the n-gram
-
-        Returns:
-            bool: True if the n-gram matches the after pattern
-        """
-        # Check if first word is candidate and remaining words match context_after patterns
-        if ngram_tuple[0] not in self.candidates_words_set:
-            return False
-
-        for j in range(1, n):
-            context_key = f'after{j - 1}'
-            if ngram_tuple[j] not in self.context_sets.get(context_key, set()):
-                return False
-        return True
 
     def get_random_word_selection_accuracy(self, num_of_random_solutions: int = 1000) -> float:
         """
@@ -383,3 +338,89 @@ class ClozeSolver:
         correct_order = self.candidates_words # The correct order is the order in candidates file
         matches = sum(1 for prediction, correct in zip(solution, correct_order) if prediction == correct)
         return (matches / len(correct_order)) * 100
+
+
+class NgramProcessor:
+    """Helper class for multiprocessing that replicates the helper functions."""
+
+    def __init__(self,
+                 context_sets: Dict[str, Set[str]],
+                 candidates_words_set: Set[str],
+                 left_only: bool,
+                 max_ngram_order: int):
+
+        self.context_sets = context_sets
+        self.candidates_words_set = candidates_words_set
+        self.left_only = left_only
+        self.max_ngram_order = max_ngram_order
+        self.punctuation_re = re.compile(r'[^\w\s-]')
+
+    def process_chunk(self, chunk_data: Tuple[int, List[str]])-> Tuple[Counter, Dict[int, Counter]]:
+        """Process a chunk of lines."""
+        chunk_idx, chunk = chunk_data
+        unigrams_chunk = Counter()
+        ngrams_chunk = {n: Counter() for n in range(2, self.max_ngram_order + 1)}
+
+        for i, line in enumerate(chunk):
+            words = self._tokenize(line)
+
+            # Count unigrams
+            unigrams_chunk.update(words)
+
+            # Count n-grams for each order
+            for n in range(2, self.max_ngram_order + 1):
+                self._update_ngrams(words, n, ngrams_chunk)
+
+            if (chunk_idx * len(chunk) + i) % 100000 == 0:
+                print(f"Finished {chunk_idx * len(chunk) + i} lines...")
+
+        return unigrams_chunk, ngrams_chunk
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Tokenize text into words, handling punctuation."""
+        clean_text = self.punctuation_re.sub('', text).lower()
+        return clean_text.split()
+
+    def _update_ngrams(self, words: List[str], n: int, ngrams_chunk: Dict[int, Counter]) -> None:
+        """
+        Process and count n-grams of order n for a line of text.
+        Only counts n-grams that match the relevant patterns (before→candidate or candidate→after).
+
+        Args:
+            words: Tokenized words from a line
+            n: The order of n-grams to process
+            ngrams_chunk: Dictionary mapping n to Counter for storing n-gram counts
+        """
+        if len(words) < n:
+            return
+
+        # Count n-grams once using Counter
+        ngram_counts = Counter(zip(*[words[j:] for j in range(n)]))
+
+        # Loop only over n-grams that actually appear
+        for ngram_tuple, count in ngram_counts.items():
+            # Pattern 1: context_before → ... → candidate
+            if self._matches_before_pattern(ngram_tuple, n):
+                ngrams_chunk[n][ngram_tuple] += count
+
+            # Pattern 2: candidate → context_after → ... (only if not left_only)
+            elif not self.left_only and self._matches_after_pattern(ngram_tuple, n):
+                ngrams_chunk[n][ngram_tuple] += count
+
+    def _matches_before_pattern(self, ngram_tuple: tuple, n: int) -> bool:
+        """Check if an n-gram matches pattern 1: context_before → ... → candidate."""
+        for j in range(n - 1):
+            context_key = f'before{j}'
+            if ngram_tuple[j] not in self.context_sets.get(context_key, set()):
+                return False
+        return ngram_tuple[-1] in self.candidates_words_set
+
+    def _matches_after_pattern(self, ngram_tuple: tuple, n: int) -> bool:
+        """Check if an n-gram matches pattern 2: candidate → context_after → ..."""
+        if ngram_tuple[0] not in self.candidates_words_set:
+            return False
+        for j in range(1, n):
+            context_key = f'after{j - 1}'
+            if ngram_tuple[j] not in self.context_sets.get(context_key, set()):
+                return False
+        return True

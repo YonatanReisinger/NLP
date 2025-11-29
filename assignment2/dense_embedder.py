@@ -4,7 +4,7 @@ from typing import List, Tuple
 import numpy as np
 import gensim.downloader as api
 
-class DenseEmbedding:
+class DenseEmbedder:
     """Loads and provides access to pre-trained word embeddings."""
 
     def __init__(self, model_name: str = 'word2vec-google-news-300', use_cache: bool = False):

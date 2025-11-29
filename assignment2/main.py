@@ -3,8 +3,8 @@ import time
 import numpy as np
 
 from valence_dataset import ValenceDataset
-from sparse_embedding import SparseEmbedding
-from dense_embedding import DenseEmbedding
+from sparse_embedder import SparseEmbedder
+from dense_embedder import DenseEmbedder
 from valence_predictor import ValencePredictor
 
 
@@ -24,10 +24,10 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
     # TODO: use_cache should be False when submitting the task
     use_cache = True
     if is_dense_embedding:
-        embedding = DenseEmbedding(model_name='word2vec-google-news-300', use_cache=use_cache)
+        embedding = DenseEmbedder(model_name='word2vec-google-news-300', use_cache=use_cache)
         X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)
     else:
-        embedding = SparseEmbedding(
+        embedding = SparseEmbedder(
             corpus_path=data_path,
             vocabulary_size=VOCABULARY_SIZE,
             window_size=WINDOW_SIZE,

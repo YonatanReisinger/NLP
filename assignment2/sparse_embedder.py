@@ -5,7 +5,7 @@ from typing import List, Dict, Set, Tuple
 import numpy as np
 
 
-class SparseEmbedding:
+class SparseEmbedder:
     """Creates sparse word embeddings using co-occurrence matrix."""
 
     def __init__(self,

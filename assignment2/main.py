@@ -9,7 +9,7 @@ from valence_predictor import ValencePredictor
 
 
 VOCABULARY_SIZE = 10000
-WINDOW_SIZE = 2  # experiment with different values (2-5 work well)
+WINDOW_SIZE = 5  # experiment with different values (2-5 work well)
 
 
 def predict_words_valence(train_file: str, test_file: str, data_path: str, is_dense_embedding: bool) -> (float, float):
@@ -31,7 +31,7 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
             corpus_path=data_path,
             vocabulary_size=VOCABULARY_SIZE,
             window_size=WINDOW_SIZE,
-            max_lines=8_000_000,
+            max_lines=None,
             use_cache=use_cache
         )
         X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)

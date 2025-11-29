@@ -31,6 +31,7 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
             corpus_path=data_path,
             vocabulary_size=VOCABULARY_SIZE,
             window_size=WINDOW_SIZE,
+            max_lines=8_000_000,
             use_cache=use_cache
         )
         X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)

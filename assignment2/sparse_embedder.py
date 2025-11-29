@@ -2,7 +2,7 @@ import os
 import pickle
 from collections import Counter
 from multiprocessing import Pool, cpu_count
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 import numpy as np
 
 
@@ -13,7 +13,7 @@ class SparseEmbedder:
                  corpus_path: str,
                  vocabulary_size: int = 10000,
                  window_size: int = 2,
-                 max_lines: int = 8_000_000,
+                 max_lines: Optional[int] = None,
                  use_cache: bool = False):
         self.corpus_path = corpus_path
         self.vocabulary_size = vocabulary_size
@@ -55,14 +55,8 @@ class SparseEmbedder:
             self.word_to_idx = cached['word_to_idx']
             return
 
-        # Read lines from corpus (up to max_lines)
         print(f"Reading corpus from {self.corpus_path}...")
-        with open(self.corpus_path, 'r', encoding='utf-8') as f:
-            lines = []
-            for i, line in enumerate(f):
-                if i >= self.max_lines:
-                    break
-                lines.append(line)
+        lines = self._read_lines_from_corpus()
 
         # Split into chunks for parallel processing
         num_workers = cpu_count() or 1
@@ -96,14 +90,8 @@ class SparseEmbedder:
         if cached is not None:
             return cached
 
-        # Read lines from corpus (up to max_lines)
         print(f"Reading corpus for co-occurrence matrix...")
-        with open(self.corpus_path, 'r', encoding='utf-8') as f:
-            lines = []
-            for i, line in enumerate(f):
-                if i >= self.max_lines:
-                    break
-                lines.append(line)
+        lines = self._read_lines_from_corpus()
 
         # Split into chunks for parallel processing
         num_workers = cpu_count() or 1
@@ -147,9 +135,18 @@ class SparseEmbedder:
                 embeddings.append(np.zeros(self.vocabulary_size, dtype=np.float32))
         return np.array(embeddings)
 
+    def _read_lines_from_corpus(self) -> List[str]:
+        """Read lines from corpus up to max_lines."""
+        with open(self.corpus_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        return lines if self.max_lines is None else lines[:self.max_lines]
+
     def _get_cache_path(self, name: str) -> str:
         """Get cache file path for a given cache name."""
-        return os.path.join(self.cache_dir, f'{name}_{self.vocabulary_size}_{self.max_lines}_{self.window_size}.pkl')
+        if self.max_lines is not None:
+            return os.path.join(self.cache_dir, f'{name}_{self.vocabulary_size}_{self.max_lines}_{self.window_size}.pkl')
+        else:
+            return os.path.join(self.cache_dir, f'{name}_{self.vocabulary_size}_{self.window_size}.pkl')
 
     def _load_from_cache(self, name: str):
         """Load data from cache if available. Returns None if not found."""

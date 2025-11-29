@@ -21,10 +21,19 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
     test_data = ValenceDataset(test_file)
 
     # Get embeddings based on type
+    # TODO: use_cache should be False when submitting the task
+    use_cache = True
     if is_dense_embedding:
-        X_train, X_test = _get_dense_embeddings(train_data.words, test_data.words)
+        embedding = DenseEmbedding(model_name='word2vec-google-news-300', use_cache=use_cache)
+        X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)
     else:
-        X_train, X_test = _get_sparse_embeddings(train_data.words, test_data.words, data_path)
+        embedding = SparseEmbedding(
+            corpus_path=data_path,
+            vocabulary_size=VOCABULARY_SIZE,
+            window_size=WINDOW_SIZE,
+            use_cache=use_cache
+        )
+        X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)
 
     # Train and evaluate
     y_train = np.array(train_data.scores)
@@ -36,41 +45,6 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
 
     mse, corr = predictor.evaluate(y_test, y_pred)
     return mse, corr
-
-
-def _get_dense_embeddings(train_words, test_words):
-    """Get dense embeddings using pre-trained word vectors."""
-    # TODO: use_cache should be False when submitting the task
-    embedding = DenseEmbedding(model_name='word2vec-google-news-300', use_cache=True)
-    embedding.load_model()
-
-    X_train = embedding.get_embeddings(train_words)
-    X_test = embedding.get_embeddings(test_words)
-    return X_train, X_test
-
-
-def _get_sparse_embeddings(train_words, test_words, corpus_path):
-    """Get sparse embeddings using co-occurrence matrix."""
-    # TODO: use_cache should be False when submitting the task
-    embedding = SparseEmbedding(
-        corpus_path=corpus_path,
-        vocabulary_size=VOCABULARY_SIZE,
-        window_size=WINDOW_SIZE,
-        use_cache=True
-    )
-
-    # Build vocabulary from corpus
-    print("Building vocabulary...")
-    embedding.build_vocabulary()
-
-    # Build co-occurrence matrix for train + test words
-    all_words = set(train_words) | set(test_words)
-    print(f"Building co-occurrence matrix for {len(all_words)} words...")
-    word_vectors = embedding.build_cooccurrence_matrix(all_words)
-
-    X_train = embedding.get_embeddings(train_words, word_vectors)
-    X_test = embedding.get_embeddings(test_words, word_vectors)
-    return X_train, X_test
 
 
 if __name__ == '__main__':

@@ -1,6 +1,6 @@
 import os
 import pickle
-from typing import List
+from typing import List, Tuple
 import numpy as np
 import gensim.downloader as api
 
@@ -20,14 +20,30 @@ class DenseEmbedding:
         """Load the pre-trained embedding model."""
         self.model = api.load(self.model_name)
 
-    def get_embeddings(self, words: List[str]) -> np.ndarray:
-        """Get embedding matrix for a list of words."""
+    def get_train_test_embeddings(self,
+                                  train_words: List[str],
+                                  test_words: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """Get embeddings for train and test words.
+
+        Loads the model and returns embeddings for both word lists.
+        """
         # Try cache first
         cached = self._load_from_cache('dense_embeddings')
         if cached is not None:
-            return cached
+            return cached['X_train'], cached['X_test']
 
-        # Build embeddings
+        # Load model and build embeddings
+        self.load_model()
+        X_train = self.get_embeddings(train_words)
+        X_test = self.get_embeddings(test_words)
+
+        # Save to cache
+        self._save_to_cache('dense_embeddings', {'X_train': X_train, 'X_test': X_test})
+
+        return X_train, X_test
+
+    def get_embeddings(self, words: List[str]) -> np.ndarray:
+        """Get embedding matrix for a list of words."""
         dim = self.model.vector_size
         embeddings = []
 
@@ -37,11 +53,7 @@ class DenseEmbedding:
             else:
                 embeddings.append(np.zeros(dim, dtype=np.float32))
 
-        result = np.array(embeddings)
-        # Save to cache
-        self._save_to_cache(name='dense_embeddings', data=result)
-
-        return result
+        return np.array(embeddings)
 
     def _get_cache_path(self, name: str) -> str:
         """Get cache file path for a given cache name."""

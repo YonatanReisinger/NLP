@@ -1,15 +1,18 @@
 import os
 import pickle
 from collections import Counter
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Tuple
 import numpy as np
 
 
 class SparseEmbedding:
     """Creates sparse word embeddings using co-occurrence matrix."""
 
-    def __init__(self, corpus_path: str, vocabulary_size: int = 10000,
-                 window_size: int = 2, max_lines: int = 8_000_000,
+    def __init__(self,
+                 corpus_path: str,
+                 vocabulary_size: int = 10000,
+                 window_size: int = 2,
+                 max_lines: int = 8_000_000,
                  use_cache: bool = False):
         self.corpus_path = corpus_path
         self.vocabulary_size = vocabulary_size
@@ -23,6 +26,24 @@ class SparseEmbedding:
         self.cache_dir = os.path.join(os.path.dirname(__file__), '.cache')
         if self.use_cache:
             os.makedirs(self.cache_dir, exist_ok=True)
+
+    def get_train_test_embeddings(self,
+                                  train_words: List[str],
+                                  test_words: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """Get embeddings for train and test words.
+
+        Builds vocabulary and co-occurrence matrix, then returns normalized embeddings.
+        """
+        print("Building vocabulary...")
+        self.build_vocabulary()
+
+        all_words = set(train_words) | set(test_words)
+        print(f"Building co-occurrence matrix for {len(all_words)} words...")
+        word_vectors = self.build_cooccurrence_matrix(all_words)
+
+        X_train = self.get_embeddings(train_words, word_vectors)
+        X_test = self.get_embeddings(test_words, word_vectors)
+        return X_train, X_test
 
     def build_vocabulary(self) -> None:
         """Build vocabulary from the top-k most frequent words in corpus."""

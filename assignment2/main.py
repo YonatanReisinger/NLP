@@ -40,7 +40,8 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
 
 def _get_dense_embeddings(train_words, test_words):
     """Get dense embeddings using pre-trained word vectors."""
-    embedding = DenseEmbedding(model_name='word2vec-google-news-300')
+    # TODO: use_cache should be False when submitting the task
+    embedding = DenseEmbedding(model_name='word2vec-google-news-300', use_cache=True)
     embedding.load_model()
 
     X_train = embedding.get_embeddings(train_words)
@@ -50,10 +51,12 @@ def _get_dense_embeddings(train_words, test_words):
 
 def _get_sparse_embeddings(train_words, test_words, corpus_path):
     """Get sparse embeddings using co-occurrence matrix."""
+    # TODO: use_cache should be False when submitting the task
     embedding = SparseEmbedding(
         corpus_path=corpus_path,
         vocabulary_size=VOCABULARY_SIZE,
-        window_size=WINDOW_SIZE
+        window_size=WINDOW_SIZE,
+        use_cache=True
     )
 
     # Build vocabulary from corpus

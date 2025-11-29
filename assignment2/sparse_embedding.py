@@ -1,6 +1,5 @@
-"""
-SparseEmbedding: Builds co-occurrence matrix from Wikipedia corpus.
-"""
+import os
+import pickle
 from collections import Counter
 from typing import List, Dict, Set
 import numpy as np
@@ -10,17 +9,31 @@ class SparseEmbedding:
     """Creates sparse word embeddings using co-occurrence matrix."""
 
     def __init__(self, corpus_path: str, vocabulary_size: int = 10000,
-                 window_size: int = 2, max_lines: int = 8_000_000):
+                 window_size: int = 2, max_lines: int = 8_000_000,
+                 use_cache: bool = False):
         self.corpus_path = corpus_path
         self.vocabulary_size = vocabulary_size
         self.window_size = window_size
         self.max_lines = max_lines
+        self.use_cache = use_cache
 
         self.top_words: List[str] = []
         self.word_to_idx: Dict[str, int] = {}
 
+        self.cache_dir = os.path.join(os.path.dirname(__file__), '.cache')
+        if self.use_cache:
+            os.makedirs(self.cache_dir, exist_ok=True)
+
     def build_vocabulary(self) -> None:
         """Build vocabulary from the top-k most frequent words in corpus."""
+        # Try cache first
+        cached = self._load_from_cache('vocab')
+        if cached is not None:
+            self.top_words = cached['top_words']
+            self.word_to_idx = cached['word_to_idx']
+            return
+
+        # Build vocabulary from corpus
         word_counts = Counter()
         with open(self.corpus_path, 'r', encoding='utf-8') as f:
             for i, line in enumerate(f):
@@ -32,8 +45,17 @@ class SparseEmbedding:
         self.top_words = [word for word, _ in word_counts.most_common(self.vocabulary_size)]
         self.word_to_idx = {word: idx for idx, word in enumerate(self.top_words)}
 
+        # Save to cache
+        self._save_to_cache('vocab', {'top_words': self.top_words, 'word_to_idx': self.word_to_idx})
+
     def build_cooccurrence_matrix(self, target_words: Set[str]) -> Dict[str, np.ndarray]:
         """Build co-occurrence vectors for target words only."""
+        # Try cache first
+        cached = self._load_from_cache('cooccurrence')
+        if cached is not None:
+            return cached
+
+        # Build co-occurrence matrix
         word_vectors = {word: np.zeros(self.vocabulary_size, dtype=np.float32)
                         for word in target_words}
 
@@ -43,6 +65,9 @@ class SparseEmbedding:
                     break
                 tokens = line.lower().split()
                 self._update_cooccurrence(tokens, target_words, word_vectors)
+
+        # Save to cache
+        self._save_to_cache('cooccurrence', word_vectors)
 
         return word_vectors
 
@@ -78,3 +103,27 @@ class SparseEmbedding:
             else:
                 embeddings.append(np.zeros(self.vocabulary_size, dtype=np.float32))
         return np.array(embeddings)
+
+    def _get_cache_path(self, name: str) -> str:
+        """Get cache file path for a given cache name."""
+        return os.path.join(self.cache_dir, f'{name}_{self.vocabulary_size}_{self.max_lines}_{self.window_size}.pkl')
+
+    def _load_from_cache(self, name: str):
+        """Load data from cache if available. Returns None if not found."""
+        if not self.use_cache:
+            return None
+        cache_path = self._get_cache_path(name)
+        if os.path.exists(cache_path):
+            print(f"Loading {name} from cache: {cache_path}")
+            with open(cache_path, 'rb') as f:
+                return pickle.load(f)
+        return None
+
+    def _save_to_cache(self, name: str, data) -> None:
+        """Save data to cache."""
+        if not self.use_cache:
+            return
+        cache_path = self._get_cache_path(name)
+        print(f"Saving {name} to cache: {cache_path}")
+        with open(cache_path, 'wb') as f:
+            pickle.dump(data, f)

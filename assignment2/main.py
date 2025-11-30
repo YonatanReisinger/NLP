@@ -24,17 +24,16 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
     # TODO: use_cache should be False when submitting the task
     use_cache = True
     if is_dense_embedding:
-        embedding = DenseEmbedder(model_name='word2vec-google-news-300', use_cache=use_cache)
-        X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)
+        embedder = DenseEmbedder(model_name='word2vec-google-news-300', use_cache=use_cache)
     else:
-        embedding = SparseEmbedder(
+        embedder = SparseEmbedder(
             corpus_path=data_path,
             vocabulary_size=VOCABULARY_SIZE,
             window_size=WINDOW_SIZE,
             max_lines=None,
             use_cache=use_cache
         )
-        X_train, X_test = embedding.get_train_test_embeddings(train_data.words, test_data.words)
+    X_train, X_test = embedder.get_train_test_embeddings(train_data.words, test_data.words)
 
     # Train and evaluate
     y_train = np.array(train_data.scores)

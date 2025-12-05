@@ -8,6 +8,16 @@ class DenseEmbedder:
     """Loads and provides access to pre-trained word embeddings."""
 
     def __init__(self, model_name: str, use_cache: bool = False):
+        """
+        Initialize the DenseEmbedder.
+
+        Args:
+            model_name: Name of the pre-trained model to load (e.g., 'word2vec-google-news-300')
+            use_cache: Whether to cache embeddings to disk
+
+        Returns:
+            None
+        """
         self.model_name = model_name
         self.model = None
         self.use_cache = use_cache
@@ -17,15 +27,30 @@ class DenseEmbedder:
             os.makedirs(self.cache_dir, exist_ok=True)
 
     def load_model(self) -> None:
-        """Load the pre-trained embedding model."""
+        """
+        Load the pre-trained embedding model.
+
+        Args:
+            None
+
+        Returns:
+            None (sets self.model with the loaded model)
+        """
         self.model = api.load(self.model_name)
 
     def get_train_test_embeddings(self,
                                   train_words: List[str],
                                   test_words: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """Get embeddings for train and test words.
+        """
+        Get embeddings for train and test words.
 
-        Loads the model and returns embeddings for both word lists.
+        Args:
+            train_words: List of words from the training set
+            test_words: List of words from the test set
+
+        Returns:
+            Tuple of (X_train, X_test) where each is a numpy array of shape
+            (num_words, embedding_dim) containing word embeddings
         """
         # Try cache first
         cached = self._load_from_cache('dense_embeddings')
@@ -43,7 +68,15 @@ class DenseEmbedder:
         return X_train, X_test
 
     def get_embeddings(self, words: List[str]) -> np.ndarray:
-        """Get embedding matrix for a list of words."""
+        """
+        Get embedding matrix for a list of words.
+
+        Args:
+            words: List of words to get embeddings for
+
+        Returns:
+            Numpy array of shape (len(words), embedding_dim) with word embeddings
+        """
         dim = self.model.vector_size
         embeddings = []
 
@@ -56,11 +89,27 @@ class DenseEmbedder:
         return np.array(embeddings)
 
     def _get_cache_path(self, name: str) -> str:
-        """Get cache file path for a given cache name."""
+        """
+        Get cache file path for a given cache name.
+
+        Args:
+            name: Name identifier for the cache
+
+        Returns:
+            Full path to the cache file
+        """
         return os.path.join(self.cache_dir, f'{name}_{self.model_name}.pkl')
 
     def _load_from_cache(self, name: str):
-        """Load data from cache if available. Returns None if not found."""
+        """
+        Load data from cache if available.
+
+        Args:
+            name: Name identifier for the cache
+
+        Returns:
+            Cached data if found, None otherwise
+        """
         if not self.use_cache:
             return None
         cache_path = self._get_cache_path(name)
@@ -71,7 +120,16 @@ class DenseEmbedder:
         return None
 
     def _save_to_cache(self, name: str, data) -> None:
-        """Save data to cache."""
+        """
+        Save data to cache.
+
+        Args:
+            name: Name identifier for the cache
+            data: Data to save to the cache file
+
+        Returns:
+            None
+        """
         if not self.use_cache:
             return
         cache_path = self._get_cache_path(name)

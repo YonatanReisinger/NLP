@@ -1,0 +1,6 @@
+{
+  "train": "data/nrc-valence-scores.trn.csv",
+  "test":  "data/nrc-valence-scores.tst.csv",
+  "wiki_data": "data/en.wikipedia2018.10M.txt",
+  "word_embedding_dense": false
+}

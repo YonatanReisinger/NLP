@@ -15,6 +15,16 @@ class SparseEmbedder:
                  window_size: int = 2,
                  max_lines: Optional[int] = None,
                  use_cache: bool = False):
+        """
+        Initialize the SparseEmbedder.
+
+        Args:
+            corpus_path: Path to the text corpus file
+            vocabulary_size: Number of most frequent words to use as vocabulary
+            window_size: Context window size for co-occurrence counting
+            max_lines: Maximum number of lines to read from corpus (None for all)
+            use_cache: Whether to cache intermediate results to disk
+        """
         self.corpus_path = corpus_path
         self.vocabulary_size = vocabulary_size
         self.window_size = window_size
@@ -31,9 +41,18 @@ class SparseEmbedder:
     def get_train_test_embeddings(self,
                                   train_words: List[str],
                                   test_words: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """Get embeddings for train and test words.
+        """
+        Get embeddings for train and test words.
 
         Builds vocabulary and co-occurrence matrix, then returns normalized embeddings.
+
+        Args:
+            train_words: List of words from the training set
+            test_words: List of words from the test set
+
+        Returns:
+            Tuple of (X_train, X_test) where each is a numpy array of shape
+            (num_words, vocabulary_size) containing normalized word embeddings
         """
         print("Building vocabulary...")
         self.build_vocabulary()
@@ -47,7 +66,15 @@ class SparseEmbedder:
         return X_train, X_test
 
     def build_vocabulary(self) -> None:
-        """Build vocabulary from the top-k most frequent words in corpus using multiprocessing."""
+        """
+        Build vocabulary from the top-k most frequent words in corpus using multiprocessing.
+
+        Populates self.top_words with the most frequent words and self.word_to_idx
+        with a mapping from words to their indices.
+
+        Returns:
+            None (modifies self.top_words and self.word_to_idx in place)
+        """
         # Try cache first
         cached = self._load_from_cache('vocab')
         if cached is not None:
@@ -84,7 +111,16 @@ class SparseEmbedder:
         self._save_to_cache('vocab', {'top_words': self.top_words, 'word_to_idx': self.word_to_idx})
 
     def build_cooccurrence_matrix(self, target_words: Set[str]) -> Dict[str, np.ndarray]:
-        """Build co-occurrence vectors for target words only using multiprocessing."""
+        """
+        Build co-occurrence vectors for target words only using multiprocessing.
+
+        Args:
+            target_words: Set of words to build co-occurrence vectors for
+
+        Returns:
+            Dictionary mapping each target word to its co-occurrence vector
+            (numpy array of shape (vocabulary_size,))
+        """
         # Try cache first
         cached = self._load_from_cache('cooccurrence')
         if cached is not None:
@@ -120,9 +156,19 @@ class SparseEmbedder:
 
         return word_vectors
 
-    def get_embeddings(self, words: List[str],
+    def get_embeddings(self,
+                       words: List[str],
                        word_vectors: Dict[str, np.ndarray]) -> np.ndarray:
-        """Get normalized embedding matrix for a list of words."""
+        """
+        Get normalized embedding matrix for a list of words.
+
+        Args:
+            words: List of words to get embeddings for
+            word_vectors: Dictionary mapping words to their co-occurrence vectors
+
+        Returns:
+            Numpy array of shape (len(words), vocabulary_size) with L2-normalized embeddings
+        """
         embeddings = []
         for word in words:
             if word in word_vectors:
@@ -136,20 +182,41 @@ class SparseEmbedder:
         return np.array(embeddings)
 
     def _read_lines_from_corpus(self) -> List[str]:
-        """Read lines from corpus up to max_lines."""
+        """
+        Read lines from corpus up to max_lines.
+
+        Returns:
+            List of lines from the corpus file
+        """
         with open(self.corpus_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         return lines if self.max_lines is None else lines[:self.max_lines]
 
     def _get_cache_path(self, name: str) -> str:
-        """Get cache file path for a given cache name."""
+        """
+        Get cache file path for a given cache name.
+
+        Args:
+            name: Name identifier for the cache (e.g., 'vocab', 'cooccurrence')
+
+        Returns:
+            Full path to the cache file
+        """
         if self.max_lines is not None:
             return os.path.join(self.cache_dir, f'{name}_{self.vocabulary_size}_{self.max_lines}_{self.window_size}.pkl')
         else:
             return os.path.join(self.cache_dir, f'{name}_{self.vocabulary_size}_{self.window_size}.pkl')
 
     def _load_from_cache(self, name: str):
-        """Load data from cache if available. Returns None if not found."""
+        """
+        Load data from cache if available.
+
+        Args:
+            name: Name identifier for the cache (e.g., 'vocab', 'cooccurrence')
+
+        Returns:
+            Cached data if found, None otherwise
+        """
         if not self.use_cache:
             return None
         cache_path = self._get_cache_path(name)
@@ -160,7 +227,16 @@ class SparseEmbedder:
         return None
 
     def _save_to_cache(self, name: str, data) -> None:
-        """Save data to cache."""
+        """
+        Save data to cache.
+
+        Args:
+            name: Name identifier for the cache (e.g., 'vocab', 'cooccurrence')
+            data: Data to save to the cache file
+
+        Returns:
+            None
+        """
         if not self.use_cache:
             return
         cache_path = self._get_cache_path(name)
@@ -243,7 +319,16 @@ class CooccurrenceProcessor:
         return word_vectors
 
     def _update_cooccurrence(self, tokens: List[str], word_vectors: Dict[str, np.ndarray]) -> None:
-        """Update co-occurrence counts for a single line of tokens."""
+        """
+        Update co-occurrence counts for a single line of tokens.
+
+        Args:
+            tokens: List of tokens from a single line
+            word_vectors: Dictionary mapping target words to their co-occurrence vectors
+
+        Returns:
+            None (modifies word_vectors in place)
+        """
         for i, token in enumerate(tokens):
             if token not in self.target_words:
                 continue

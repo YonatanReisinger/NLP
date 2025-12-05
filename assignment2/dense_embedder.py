@@ -7,7 +7,7 @@ import gensim.downloader as api
 class DenseEmbedder:
     """Loads and provides access to pre-trained word embeddings."""
 
-    def __init__(self, model_name: str = 'word2vec-google-news-300', use_cache: bool = False):
+    def __init__(self, model_name: str, use_cache: bool = False):
         self.model_name = model_name
         self.model = None
         self.use_cache = use_cache

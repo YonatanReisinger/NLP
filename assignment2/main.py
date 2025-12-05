@@ -9,7 +9,7 @@ from valence_predictor import ValencePredictor
 
 
 VOCABULARY_SIZE = 10000
-WINDOW_SIZE = 5  # experiment with different values (2-5 work well)
+WINDOW_SIZE = 5
 
 
 def predict_words_valence(train_file: str, test_file: str, data_path: str, is_dense_embedding: bool) -> (float, float):
@@ -21,17 +21,13 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
     test_data = ValenceDataset(test_file)
 
     # Get embeddings based on type
-    # TODO: use_cache should be False when submitting the task
-    use_cache = True
     if is_dense_embedding:
-        embedder = DenseEmbedder(model_name='word2vec-google-news-300', use_cache=use_cache)
+        embedder = DenseEmbedder(model_name='word2vec-google-news-300')
     else:
         embedder = SparseEmbedder(
             corpus_path=data_path,
             vocabulary_size=VOCABULARY_SIZE,
             window_size=WINDOW_SIZE,
-            max_lines=None,
-            use_cache=use_cache
         )
     X_train, X_test = embedder.get_train_test_embeddings(train_data.words, test_data.words)
 

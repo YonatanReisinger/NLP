@@ -30,7 +30,7 @@ _NO_ANSWER_PATTERNS = [
 ]
 
 _PREFIX_PATTERNS = [
-    r"^(?:the\s+)?answer\s*(?:is|:)\s*",
+    r"^(?:the\s+)?answer\s*(?:is\s*:?\s*|:\s*)",
     r"^based\s+on\s+(?:the\s+)?(?:context|passage|text)\s*,?\s*",
     r"^according\s+to\s+(?:the\s+)?(?:context|passage|text)\s*,?\s*",
     r"^from\s+(?:the\s+)?(?:context|passage|text)\s*,?\s*",

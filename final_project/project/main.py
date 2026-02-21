@@ -112,9 +112,9 @@ class ModelManager:
 class PostProcessor:
     """Worker class for multiprocessing post-processing.
 
-    Similar to NgramProcessor in assignment 1 — holds the components
-    needed for post-processing and exposes a process_item() method
-    that can be called by Pool.map() across multiple CPU cores.
+    Holds the components needed for post-processing and exposes a
+    process_item() method that can be called by Pool.map() across
+    multiple CPU cores.
     """
 
     def __init__(self, answer_processor, confidence_scorer, span_matcher):
@@ -159,8 +159,8 @@ class SquadQARunner:
         3. Fuzzy span matching (SpanMatcher)
         4. Rule-based post-processing (AnswerProcessor)
 
-    Uses multiprocessing.Pool (like NgramProcessor in assignment 1)
-    to parallelise the post-processing step across CPU cores.
+    Uses multiprocessing.Pool to parallelise the post-processing
+    step across CPU cores.
     """
 
     BATCH_SIZE = 8
@@ -185,8 +185,7 @@ class SquadQARunner:
 
         Phase 1 — Generation: produce raw answers in batches.
         Phase 2 — Post-processing: use multiprocessing.Pool to
-                  post-process all answers in parallel across CPU cores
-                  (same pattern as assignment 1's NgramProcessor).
+                  post-process all answers in parallel across CPU cores.
 
         Returns:
             str: Path to the results CSV.

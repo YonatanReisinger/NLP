@@ -4,6 +4,7 @@ import time
 import torch
 torch.set_default_device('cpu')
 
+from multiprocessing import Pool, cpu_count
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from utils.evaluate_results import NO_ANSWER_MARKER, evaluate_results
 from utils.prompt_builder import PromptBuilder
@@ -107,17 +108,58 @@ class ModelManager:
         return texts, confidences
 
 
+class PostProcessor:
+    """Worker class for multiprocessing post-processing.
+
+    Similar to NgramProcessor in assignment 1 — holds the components
+    needed for post-processing and exposes a process_item() method
+    that can be called by Pool.map() across multiple CPU cores.
+    """
+
+    def __init__(self, answer_processor, confidence_scorer, span_matcher):
+        self.answer_processor = answer_processor
+        self.confidence_scorer = confidence_scorer
+        self.span_matcher = span_matcher
+
+    def process_item(self, item):
+        """Post-process a single (raw_answer, context, confidence) tuple.
+
+        Args:
+            item: Tuple of (raw_answer, context, confidence).
+
+        Returns:
+            str: The final answer or NO ANSWER.
+        """
+        raw_answer, context, confidence = item
+
+        # Step 1: regex cleanup + grounding check
+        answer = self.answer_processor.process(raw_answer, context)
+        if answer == NO_ANSWER_MARKER:
+            return answer
+
+        # Step 2: confidence gate
+        if not self.confidence_scorer.is_confident(confidence):
+            return NO_ANSWER_MARKER
+
+        # Step 3: snap to closest context span
+        snapped = self.span_matcher.snap_or_reject(answer, context)
+        if snapped is None:
+            return NO_ANSWER_MARKER
+
+        return snapped
+
+
 class SquadQARunner:
     """Orchestrates the full QA pipeline.
 
     Combines four techniques beyond basic prompting:
         1. Batched parallel inference (ModelManager)
-        2. Logit confidence scoring (ConfidenceScorer) — reject
-           low-confidence answers as likely hallucinations
-        3. Fuzzy span matching (SpanMatcher) — snap answers to the
-           closest actual context substring, fixing extraction errors
-        4. Rule-based post-processing (AnswerProcessor) — no-answer
-           detection, prefix cleanup, grounding verification
+        2. Logit confidence scoring (ConfidenceScorer)
+        3. Fuzzy span matching (SpanMatcher)
+        4. Rule-based post-processing (AnswerProcessor)
+
+    Uses multiprocessing.Pool (like NgramProcessor in assignment 1)
+    to parallelise the post-processing step across CPU cores.
     """
 
     BATCH_SIZE = 8
@@ -136,65 +178,65 @@ class SquadQARunner:
         raw_answer = self.model_manager.generate_single(messages)
         return self.answer_processor.process(raw_answer, context)
 
-    def _process_one(self, raw_answer, context, confidence):
-        """Apply the full post-processing pipeline to a single item.
-
-        Steps:
-            1. AnswerProcessor — regex cleanup + basic grounding check.
-            2. ConfidenceScorer — reject if log-prob below threshold.
-            3. SpanMatcher — snap answer to nearest context span, or
-               reject if no close match exists.
-        """
-        # Step 1: standard cleanup (no-answer detection, prefix removal, …)
-        answer = self.answer_processor.process(raw_answer, context)
-        if answer == NO_ANSWER_MARKER:
-            return answer
-
-        # Step 2: confidence gate
-        if not self.confidence_scorer.is_confident(confidence):
-            return NO_ANSWER_MARKER
-
-        # Step 3: snap to the closest real context span
-        snapped = self.span_matcher.snap_or_reject(answer, context)
-        if snapped is None:
-            return NO_ANSWER_MARKER
-
-        return snapped
-
     def run(self, data_filename):
-        """Solve an entire SQuAD 2.0 CSV file using batched inference.
+        """Solve an entire SQuAD 2.0 CSV file.
+
+        Phase 1 — Generation: produce raw answers in batches.
+        Phase 2 — Post-processing: use multiprocessing.Pool to
+                  post-process all answers in parallel across CPU cores
+                  (same pattern as assignment 1's NgramProcessor).
 
         Returns:
             str: Path to the results CSV.
         """
         df = pd.read_csv(data_filename)
         total = len(df)
-        final_answers = []
 
         rows = list(df.iterrows())
+
+        # ── Phase 1: Generation (sequential batched) ────────────────
+        all_raw_answers = []
+        all_contexts = []
+        all_confidences = []
 
         for batch_start in range(0, total, self.BATCH_SIZE):
             batch_rows = rows[batch_start: batch_start + self.BATCH_SIZE]
 
-            # 1. Build prompts
             messages_list = [
                 self.prompt_builder.build_messages(row["context"], row["question"])
                 for _, row in batch_rows
             ]
             contexts = [row["context"] for _, row in batch_rows]
 
-            # 2. Batched generation → texts + confidences
             raw_answers, confidences = self.model_manager.generate_batch(
                 messages_list
             )
 
-            # 3. Full post-processing pipeline per item
-            for i, raw_answer in enumerate(raw_answers):
-                answer = self._process_one(
-                    raw_answer, contexts[i], confidences[i]
-                )
-                final_answers.append(answer)
-                print(f"  [{len(final_answers)}/{total}] {answer[:60]}")
+            all_raw_answers.extend(raw_answers)
+            all_contexts.extend(contexts)
+            all_confidences.extend(confidences)
+
+            # Progress for generation phase
+            print(f"  [generated {len(all_raw_answers)}/{total}]")
+
+        # ── Phase 2: Post-processing with multiprocessing ───────────
+        num_workers = cpu_count() or 1
+        print(f"  Post-processing {total} answers using {num_workers} workers...")
+
+        processor = PostProcessor(
+            self.answer_processor,
+            self.confidence_scorer,
+            self.span_matcher,
+        )
+
+        # Build work items — list of (raw_answer, context, confidence) tuples
+        work_items = list(zip(all_raw_answers, all_contexts, all_confidences))
+
+        with Pool(processes=num_workers) as pool:
+            final_answers = pool.map(processor.process_item, work_items)
+
+        for i, answer in enumerate(final_answers):
+            print(f"  [{i + 1}/{total}] {answer[:60]}")
 
         df["final answer"] = final_answers
 

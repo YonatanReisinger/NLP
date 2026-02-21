@@ -8,10 +8,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from utils.evaluate_results import NO_ANSWER_MARKER, evaluate_results
 from utils.prompt_builder import PromptBuilder
 from utils.answer_processor import AnswerProcessor
+from utils.confidence_scorer import ConfidenceScorer
+from utils.span_matcher import SpanMatcher
 
 
 class ModelManager:
-    """Responsible for loading the LLM and running inference (single + batch)."""
+    """Responsible for loading the LLM and running inference (single + batch).
+
+    Returns both raw text **and** per-token confidence scores so that
+    downstream components can make reject/accept decisions.
+    """
 
     def __init__(self, model_name='meta-llama/Llama-3.2-3B-Instruct'):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, token=True)
@@ -21,6 +27,7 @@ class ModelManager:
         self.model.config.pad_token_id = self.tokenizer.eos_token_id
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
+    # ── single-item inference ───────────────────────────────────────
     def generate_single(self, messages):
         """Run inference on a single chat-message list.
 
@@ -45,14 +52,16 @@ class ModelManager:
         new_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
+    # ── batched inference with confidence scores ────────────────────
     def generate_batch(self, messages_list):
-        """Run inference on a batch of chat-message lists in parallel.
+        """Run batched inference and return texts + confidence scores.
 
-        Tokenizes all prompts together with left-padding so that generation
-        starts at the same position for every sequence in the batch.
+        Tokenizes all prompts together with left-padding so that
+        generation starts at the same position for every sequence.
 
         Returns:
-            list[str]: Raw generated text for each prompt (new tokens only).
+            tuple[list[str], list[float]]:
+                (raw_texts, confidences) — one entry per input.
         """
         prompt_texts = [
             self.tokenizer.apply_chat_template(
@@ -61,8 +70,6 @@ class ModelManager:
             for msgs in messages_list
         ]
 
-        # Left-pad so all sequences are right-aligned — required for
-        # correct batched generation with causal LMs.
         original_padding_side = self.tokenizer.padding_side
         self.tokenizer.padding_side = "left"
         inputs = self.tokenizer(
@@ -76,38 +83,83 @@ class ModelManager:
                 attention_mask=inputs["attention_mask"],
                 max_new_tokens=50,
                 do_sample=False,
+                return_dict_in_generate=True,
+                output_scores=True,
             )
 
         prompt_len = inputs["input_ids"].shape[1]
-        results = []
+
+        # Decode texts
+        texts = []
         for i in range(len(messages_list)):
-            new_tokens = outputs[i][prompt_len:]
-            results.append(
+            new_tokens = outputs.sequences[i][prompt_len:]
+            texts.append(
                 self.tokenizer.decode(new_tokens, skip_special_tokens=True)
             )
-        return results
+
+        # Compute confidence scores
+        confidence_scorer = ConfidenceScorer()
+        confidences = confidence_scorer.compute_batch_confidences(
+            outputs.scores, outputs.sequences, prompt_len,
+            self.tokenizer.eos_token_id,
+        )
+
+        return texts, confidences
 
 
 class SquadQARunner:
-    """Orchestrates the full QA pipeline: prompt building, batched
-    inference, and answer post-processing."""
+    """Orchestrates the full QA pipeline.
+
+    Combines four techniques beyond basic prompting:
+        1. Batched parallel inference (ModelManager)
+        2. Logit confidence scoring (ConfidenceScorer) — reject
+           low-confidence answers as likely hallucinations
+        3. Fuzzy span matching (SpanMatcher) — snap answers to the
+           closest actual context substring, fixing extraction errors
+        4. Rule-based post-processing (AnswerProcessor) — no-answer
+           detection, prefix cleanup, grounding verification
+    """
 
     BATCH_SIZE = 8
 
-    def __init__(self, model_manager, prompt_builder, answer_processor):
+    def __init__(self, model_manager, prompt_builder, answer_processor,
+                 confidence_scorer, span_matcher):
         self.model_manager = model_manager
         self.prompt_builder = prompt_builder
         self.answer_processor = answer_processor
+        self.confidence_scorer = confidence_scorer
+        self.span_matcher = span_matcher
 
     def answer_single(self, context, question):
-        """Process one (context, question) pair end-to-end.
-
-        Returns:
-            str: The final answer string or "NO ANSWER".
-        """
+        """Process one (context, question) pair end-to-end."""
         messages = self.prompt_builder.build_messages(context, question)
         raw_answer = self.model_manager.generate_single(messages)
         return self.answer_processor.process(raw_answer, context)
+
+    def _process_one(self, raw_answer, context, confidence):
+        """Apply the full post-processing pipeline to a single item.
+
+        Steps:
+            1. AnswerProcessor — regex cleanup + basic grounding check.
+            2. ConfidenceScorer — reject if log-prob below threshold.
+            3. SpanMatcher — snap answer to nearest context span, or
+               reject if no close match exists.
+        """
+        # Step 1: standard cleanup (no-answer detection, prefix removal, …)
+        answer = self.answer_processor.process(raw_answer, context)
+        if answer == NO_ANSWER_MARKER:
+            return answer
+
+        # Step 2: confidence gate
+        if not self.confidence_scorer.is_confident(confidence):
+            return NO_ANSWER_MARKER
+
+        # Step 3: snap to the closest real context span
+        snapped = self.span_matcher.snap_or_reject(answer, context)
+        if snapped is None:
+            return NO_ANSWER_MARKER
+
+        return snapped
 
     def run(self, data_filename):
         """Solve an entire SQuAD 2.0 CSV file using batched inference.
@@ -124,19 +176,23 @@ class SquadQARunner:
         for batch_start in range(0, total, self.BATCH_SIZE):
             batch_rows = rows[batch_start: batch_start + self.BATCH_SIZE]
 
-            # 1. Build all prompts for this batch
+            # 1. Build prompts
             messages_list = [
                 self.prompt_builder.build_messages(row["context"], row["question"])
                 for _, row in batch_rows
             ]
             contexts = [row["context"] for _, row in batch_rows]
 
-            # 2. Run batched generation (parallel inference)
-            raw_answers = self.model_manager.generate_batch(messages_list)
+            # 2. Batched generation → texts + confidences
+            raw_answers, confidences = self.model_manager.generate_batch(
+                messages_list
+            )
 
-            # 3. Post-process each answer
+            # 3. Full post-processing pipeline per item
             for i, raw_answer in enumerate(raw_answers):
-                answer = self.answer_processor.process(raw_answer, contexts[i])
+                answer = self._process_one(
+                    raw_answer, contexts[i], confidences[i]
+                )
                 final_answers.append(answer)
                 print(f"  [{len(final_answers)}/{total}] {answer[:60]}")
 
@@ -152,7 +208,13 @@ class SquadQARunner:
 model_manager = ModelManager()
 prompt_builder = PromptBuilder()
 answer_processor = AnswerProcessor()
-runner = SquadQARunner(model_manager, prompt_builder, answer_processor)
+confidence_scorer = ConfidenceScorer(no_answer_threshold=-1.0)
+span_matcher = SpanMatcher(min_similarity=0.6)
+
+runner = SquadQARunner(
+    model_manager, prompt_builder, answer_processor,
+    confidence_scorer, span_matcher,
+)
 
 # Keep legacy references so nothing else breaks
 model_name = 'meta-llama/Llama-3.2-3B-Instruct'

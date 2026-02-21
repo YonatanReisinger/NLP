@@ -15,6 +15,9 @@ model.config.pad_token_id = tokenizer.eos_token_id
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
 
+BATCH_SIZE = 8  # number of questions to process in parallel per batch
+
+
 def generate_answer(messages):
     """
     Query the Llama model with a list of chat messages.
@@ -40,6 +43,52 @@ def generate_answer(messages):
     return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
+def generate_answers_batch(messages_list):
+    """
+    Query the Llama model with a batch of chat message lists in parallel.
+
+    Tokenizes all prompts together with left-padding so that generation
+    starts at the same position for every sequence in the batch.
+
+    Args:
+        messages_list: list of message lists (each is a chat-format prompt).
+
+    Returns:
+        list[str]: Raw generated text for each prompt (new tokens only).
+    """
+    # Build prompt strings for every item in the batch
+    prompt_texts = [
+        tokenizer.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+        for msgs in messages_list
+    ]
+
+    # Left-pad so that all sequences are right-aligned — required for
+    # correct batched generation with causal LMs.
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    inputs = tokenizer(
+        prompt_texts, return_tensors="pt", padding=True, truncation=True
+    )
+    tokenizer.padding_side = original_padding_side
+
+    with torch.no_grad():
+        outputs = model.generate(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_new_tokens=50,
+            do_sample=False,
+        )
+
+    # Decode only newly generated tokens for each sequence
+    prompt_len = inputs["input_ids"].shape[1]
+    results = []
+    for i in range(len(messages_list)):
+        new_tokens = outputs[i][prompt_len:]
+        results.append(tokenizer.decode(new_tokens, skip_special_tokens=True))
+
+    return results
+
+
 def answer_single_question(context, question):
     """
     Build a prompt for one (context, question) pair, query the model,
@@ -63,6 +112,10 @@ def squad_qa(data_filename):
     For every row in the CSV, queries the model and writes a "final answer"
     column into a new results CSV.
 
+    Uses batched inference: multiple questions are tokenized together and
+    processed in a single model.generate() call, giving significant speedup
+    over sequential processing.
+
     Strategy overview:
         1. Carefully crafted few-shot prompt emphasising extractive answers
            and explicit NO ANSWER detection for unanswerable questions.
@@ -70,14 +123,34 @@ def squad_qa(data_filename):
         3. Grounding verification: reject answers whose content words do not
            appear in the context — likely hallucinations.
     """
+    from utils.prompt_builder import build_qa_messages
+    from utils.answer_processor import process_answer
+
     df = pd.read_csv(data_filename)
     total = len(df)
     final_answers = []
 
-    for idx, row in df.iterrows():
-        answer = answer_single_question(row["context"], row["question"])
-        final_answers.append(answer)
-        print(f"  [{len(final_answers)}/{total}] {answer[:60]}")
+    # Collect all rows for batched processing
+    rows = list(df.iterrows())
+
+    for batch_start in range(0, total, BATCH_SIZE):
+        batch_rows = rows[batch_start : batch_start + BATCH_SIZE]
+
+        # 1. Build all prompts for this batch
+        messages_list = [
+            build_qa_messages(row["context"], row["question"])
+            for _, row in batch_rows
+        ]
+        contexts = [row["context"] for _, row in batch_rows]
+
+        # 2. Run batched generation (parallel inference)
+        raw_answers = generate_answers_batch(messages_list)
+
+        # 3. Post-process each answer
+        for i, raw_answer in enumerate(raw_answers):
+            answer = process_answer(raw_answer, contexts[i])
+            final_answers.append(answer)
+            print(f"  [{len(final_answers)}/{total}] {answer[:60]}")
 
     df["final answer"] = final_answers
 

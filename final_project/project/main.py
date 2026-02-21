@@ -11,6 +11,7 @@ from utils.prompt_builder import PromptBuilder
 from utils.answer_processor import AnswerProcessor
 from utils.confidence_scorer import ConfidenceScorer
 from utils.span_matcher import SpanMatcher
+from utils.analysis_agent import AnalysisAgent
 
 
 class ModelManager:
@@ -165,12 +166,13 @@ class SquadQARunner:
     BATCH_SIZE = 8
 
     def __init__(self, model_manager, prompt_builder, answer_processor,
-                 confidence_scorer, span_matcher):
+                 confidence_scorer, span_matcher, analysis_agent):
         self.model_manager = model_manager
         self.prompt_builder = prompt_builder
         self.answer_processor = answer_processor
         self.confidence_scorer = confidence_scorer
         self.span_matcher = span_matcher
+        self.analysis_agent = analysis_agent
 
     def answer_single(self, context, question):
         """Process one (context, question) pair end-to-end."""
@@ -238,7 +240,44 @@ class SquadQARunner:
         for i, answer in enumerate(final_answers):
             print(f"  [{i + 1}/{total}] {answer[:60]}")
 
-        df["final answer"] = final_answers
+        # ── Phase 3: Analysis Agent verification ─────────────────
+        questions = [row["question"] for _, row in rows]
+        print(f"  Running Analysis Agent verification on {total} answers...")
+
+        verified_answers = list(final_answers)
+        for i in range(total):
+            context = all_contexts[i]
+            question = questions[i]
+            proposed = final_answers[i]
+            confidence = all_confidences[i]
+
+            decision = self.analysis_agent.verify(
+                context, question, proposed, confidence,
+                self.model_manager,
+            )
+
+            if proposed == NO_ANSWER_MARKER:
+                # Rescue: Agent 2 says REJECT means "NO ANSWER was wrong"
+                if decision == "REJECT":
+                    # Re-run extraction to try to get an answer
+                    msgs = self.prompt_builder.build_messages(context, question)
+                    raw = self.model_manager.generate_single(msgs)
+                    rescued = self.answer_processor.process(raw, context)
+                    if rescued != NO_ANSWER_MARKER:
+                        verified_answers[i] = rescued
+                        print(f"  [Agent2 rescued {i+1}/{total}] {rescued[:60]}")
+            else:
+                # Verify: Agent 2 says REJECT means "answer is wrong"
+                if decision == "REJECT":
+                    verified_answers[i] = NO_ANSWER_MARKER
+                    print(f"  [Agent2 rejected {i+1}/{total}] {proposed[:60]}")
+
+            if (i + 1) % 50 == 0:
+                print(f"  [verified {i+1}/{total}]")
+
+        print(f"  Analysis Agent verification complete.")
+
+        df["final answer"] = verified_answers
 
         out_filename = data_filename.replace('.csv', '-results.csv')
         df.to_csv(out_filename, index=False)
@@ -252,10 +291,11 @@ prompt_builder = PromptBuilder()
 answer_processor = AnswerProcessor()
 confidence_scorer = ConfidenceScorer(no_answer_threshold=-1.0)
 span_matcher = SpanMatcher(min_similarity=0.6)
+analysis_agent = AnalysisAgent()
 
 runner = SquadQARunner(
     model_manager, prompt_builder, answer_processor,
-    confidence_scorer, span_matcher,
+    confidence_scorer, span_matcher, analysis_agent,
 )
 
 # Keep legacy references so nothing else breaks

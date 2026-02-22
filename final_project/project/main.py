@@ -23,6 +23,8 @@ class ConfidenceScorer:
         self.no_answer_threshold = no_answer_threshold
 
     def compute_batch_confidences(self, scores, sequences, prompt_len, eos_token_id):
+        """Compute avg log-probability per generated token for each item in the batch.
+        Low avg log-prob signals the model is uncertain — likely hallucination."""
         batch_size = sequences.shape[0]
         confidences = []
 
@@ -55,6 +57,8 @@ class SpanMatcher:
         self.min_similarity = min_similarity
 
     def find_best_span(self, answer, context):
+        """Slide a window over context words and find the span most similar to the answer.
+        Uses SequenceMatcher ratio (0-1) to score each candidate window."""
         answer_lower = answer.lower().strip()
         context_lower = context.lower()
         words = context.split()
@@ -67,6 +71,7 @@ class SpanMatcher:
         best_span = None
         best_ratio = 0.0
 
+        # Search windows slightly smaller and larger than the answer length
         min_win = max(1, answer_word_count - 2)
         max_win = answer_word_count + 3
 
@@ -85,6 +90,7 @@ class SpanMatcher:
         return None, best_ratio
 
     def snap_or_reject(self, answer, context):
+        """Return the best matching span if above threshold, else None."""
         span, ratio = self.find_best_span(answer, context)
         return span
 
@@ -96,6 +102,7 @@ class SpanMatcher:
 class AnswerProcessor:
     """Responsible for cleaning raw model output into a final answer."""
 
+    # Regex patterns that indicate the model is saying "I can't answer this"
     NO_ANSWER_PATTERNS = [
         r"\bno\s*answer\b",
         r"\bcannot\s+be\s+answered\b",
@@ -112,6 +119,7 @@ class AnswerProcessor:
         r"\bi\s+(?:cannot|can't|could\s+not|couldn't)\s+(?:find|determine|answer)\b",
     ]
 
+    # Common LLM prefixes to strip (e.g., "The answer is: ...")
     PREFIX_PATTERNS = [
         r"^(?:the\s+)?answer\s*(?:is\s*:?\s*|:\s*)",
         r"^based\s+on\s+(?:the\s+)?(?:context|passage|text)\s*,?\s*",
@@ -156,12 +164,16 @@ class AnswerProcessor:
         return " ".join(text.split())
 
     def _is_grounded_in_context(self, answer, context):
+        """Check that the answer actually comes from the context (not hallucinated).
+        First tries exact substring match, then falls back to word-overlap ratio."""
         norm_answer = self._normalize(answer)
         norm_context = self._normalize(context)
 
+        # Exact substring match
         if norm_answer in norm_context:
             return True
 
+        # Word-overlap: at least 50% of content words must appear in context
         content_words = [w for w in norm_answer.split() if w not in self.STOPWORDS]
         if not content_words:
             return True
@@ -170,12 +182,15 @@ class AnswerProcessor:
         return matched / len(content_words) >= 0.5
 
     def process(self, raw_model_output, context):
+        """Clean raw LLM output into a final answer or NO_ANSWER_MARKER.
+        Pipeline: detect no-answer → strip prefixes/quotes → verify grounding."""
         text = raw_model_output.strip()
         first_line = text.split("\n")[0].strip()
 
         if self._is_no_answer_response(first_line):
             return NO_ANSWER_MARKER
 
+        # Clean up common LLM formatting artifacts
         answer = self._remove_common_prefixes(first_line)
         answer = self._strip_quotes(answer)
         answer = answer.rstrip(".")
@@ -184,6 +199,7 @@ class AnswerProcessor:
         if not answer:
             return NO_ANSWER_MARKER
 
+        # Reject answers that don't appear in the context (anti-hallucination)
         if not self._is_grounded_in_context(answer, context):
             return NO_ANSWER_MARKER
 
@@ -211,6 +227,8 @@ class PromptBuilder:
         "6. Respond ONLY with the extracted answer or NO ANSWER — no explanations, no extra words."
     )
 
+    # Paired few-shot examples: each answerable question is followed by
+    # a similar but unanswerable variant, teaching the model to distinguish them.
     FEW_SHOT_EXAMPLES = [
         {
             "context": (
@@ -257,6 +275,7 @@ class PromptBuilder:
     ]
 
     def build_messages(self, context, question):
+        """Assemble a chat-format prompt: system instruction + few-shot examples + actual query."""
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
 
         for example in self.FEW_SHOT_EXAMPLES:
@@ -293,6 +312,7 @@ class ModelManager:
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
     def generate_single(self, messages):
+        """Generate a response for a single chat-format message list (no confidence scores)."""
         prompt_text = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False
         )
@@ -312,6 +332,8 @@ class ModelManager:
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
     def generate_batch(self, messages_list):
+        """Generate responses for a batch of prompts. Returns (texts, confidences).
+        Uses left-padding so shorter prompts align correctly in the batch."""
         prompt_texts = [
             self.tokenizer.apply_chat_template(
                 msgs, add_generation_prompt=True, tokenize=False
@@ -370,9 +392,12 @@ class ExtractionAgent:
         self.span_matcher = span_matcher
 
     def _collect_observation(self, raw_answer, context, confidence):
+        """Gather all evidence signals for the AnalysisAgent to reason over:
+        cleaned answer, confidence, grounding check, and span matching."""
         cleaned_answer = self.answer_processor.process(raw_answer, context)
         no_answer_detected = self.answer_processor._is_no_answer_response(raw_answer)
 
+        # Strip LLM artifacts to get the raw candidate answer text
         first_line = raw_answer.strip().split("\n")[0].strip()
         prefix_removed = self.answer_processor._remove_common_prefixes(first_line)
         prefix_removed = self.answer_processor._strip_quotes(prefix_removed)
@@ -384,7 +409,7 @@ class ExtractionAgent:
         # Confidence threshold gate
         confident = self.confidence_scorer.is_confident(confidence)
 
-        # Span matching — snap to closest context span or reject
+        # Span matching — find closest context span via SequenceMatcher
         best_span, similarity_ratio = None, 0.0
         snapped_span = None
         if prefix_removed:
@@ -406,6 +431,7 @@ class ExtractionAgent:
         }
 
     def extract_single(self, context, question):
+        """Run the first LLM call and return an observation dict with all evidence signals."""
         messages = self.prompt_builder.build_messages(context, question)
         raw_answers, confidences = self.model_manager.generate_batch([messages])
         return self._collect_observation(raw_answers[0], context, confidences[0])
@@ -438,6 +464,7 @@ class AnalysisAgent:
         self.model_manager = model_manager
 
     def _build_analysis_prompt(self, context, question, observation):
+        """Format the extraction evidence into a structured prompt for the second LLM call."""
         no_answer_str = "Yes" if observation["no_answer_detected"] else "No"
         grounded_str = "Yes" if observation["grounded_in_context"] else "No"
         confident_str = "Yes" if observation["is_confident"] else "No (below threshold — likely hallucination)"
@@ -467,9 +494,11 @@ class AnalysisAgent:
         ]
 
     def analyze_single(self, context, question, observation):
+        """Run the second LLM call to make the final accept/reject decision."""
         messages = self._build_analysis_prompt(context, question, observation)
         raw_outputs, _ = self.model_manager.generate_batch([messages])
 
+        # Normalize various "no answer" phrasings to the official marker
         answer = raw_outputs[0].strip().split("\n")[0].strip()
         if answer.upper() in ("NO ANSWER", "NO_ANSWER", "NOANSWER"):
             answer = NO_ANSWER_MARKER
@@ -524,6 +553,7 @@ class SquadQARunner:
 
 
 # ── Initialise components ────────────────────────────────────────────
+# Wire up the two-agent pipeline: ExtractionAgent → AnalysisAgent
 model_manager = ModelManager()
 prompt_builder = PromptBuilder()
 answer_processor = AnswerProcessor()

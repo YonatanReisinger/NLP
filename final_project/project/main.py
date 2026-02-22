@@ -1,6 +1,7 @@
 import json
 import re
 import string
+from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import time
 import torch
@@ -19,12 +20,27 @@ import torch.nn.functional as F
 class ConfidenceScorer:
     """Scores generation confidence from per-step logits."""
 
-    def __init__(self, no_answer_threshold=-1.0):
+    def __init__(self, no_answer_threshold: float = -1.0) -> None:
+        """
+        Args:
+            no_answer_threshold (float): minimum avg log-prob to consider an answer confident.
+        """
         self.no_answer_threshold = no_answer_threshold
 
-    def compute_batch_confidences(self, scores, sequences, prompt_len, eos_token_id):
+    def compute_batch_confidences(self, scores: Tuple[torch.Tensor, ...], sequences: torch.Tensor,
+                                     prompt_len: int, eos_token_id: int) -> List[float]:
         """Compute avg log-probability per generated token for each item in the batch.
-        Low avg log-prob signals the model is uncertain — likely hallucination."""
+        Low avg log-prob signals the model is uncertain — likely hallucination.
+
+        Args:
+            scores (tuple[torch.Tensor]): per-step logits from model.generate, one tensor per step.
+            sequences (torch.Tensor): generated token IDs, shape (batch_size, total_seq_len).
+            prompt_len (int): number of prompt tokens (to skip when reading generated tokens).
+            eos_token_id (int): end-of-sequence token ID to stop at.
+
+        Returns:
+            list[float]: average log-probability for each item in the batch.
+        """
         batch_size = sequences.shape[0]
         confidences = []
 
@@ -42,7 +58,14 @@ class ConfidenceScorer:
 
         return confidences
 
-    def is_confident(self, confidence):
+    def is_confident(self, confidence: float) -> bool:
+        """
+        Args:
+            confidence (float): avg log-probability of the generated answer.
+
+        Returns:
+            bool: True if confidence meets the threshold.
+        """
         return confidence >= self.no_answer_threshold
 
 
@@ -53,12 +76,25 @@ class ConfidenceScorer:
 class SpanMatcher:
     """Finds the best matching span in the context for a candidate answer."""
 
-    def __init__(self, min_similarity=0.6):
+    def __init__(self, min_similarity: float = 0.6) -> None:
+        """
+        Args:
+            min_similarity (float): minimum SequenceMatcher ratio to accept a span.
+        """
         self.min_similarity = min_similarity
 
-    def find_best_span(self, answer, context):
+    def find_best_span(self, answer: str, context: str) -> Tuple[Optional[str], float]:
         """Slide a window over context words and find the span most similar to the answer.
-        Uses SequenceMatcher ratio (0-1) to score each candidate window."""
+        Uses SequenceMatcher ratio (0-1) to score each candidate window.
+
+        Args:
+            answer (str): candidate answer text from the model.
+            context (str): the original context passage.
+
+        Returns:
+            tuple[str | None, float]: (best matching span, similarity ratio).
+                Returns (None, best_ratio) if no span meets min_similarity.
+        """
         answer_lower = answer.lower().strip()
         context_lower = context.lower()
         words = context.split()
@@ -89,8 +125,16 @@ class SpanMatcher:
             return best_span, best_ratio
         return None, best_ratio
 
-    def snap_or_reject(self, answer, context):
-        """Return the best matching span if above threshold, else None."""
+    def snap_or_reject(self, answer: str, context: str) -> Optional[str]:
+        """Return the best matching span if above threshold, else None.
+
+        Args:
+            answer (str): candidate answer text.
+            context (str): the original context passage.
+
+        Returns:
+            str | None: the snapped span, or None if no match meets the threshold.
+        """
         span, ratio = self.find_best_span(answer, context)
         return span
 
@@ -139,18 +183,39 @@ class AnswerProcessor:
         "whom", "what", "where", "when", "how", "than", "then",
     })
 
-    def _is_no_answer_response(self, text):
+    def _is_no_answer_response(self, text: str) -> bool:
+        """
+        Args:
+            text (str): raw model output text.
+
+        Returns:
+            bool: True if the text matches any no-answer pattern.
+        """
         lowered = text.lower().strip()
         return any(re.search(p, lowered) for p in self.NO_ANSWER_PATTERNS)
 
-    def _remove_common_prefixes(self, text):
+    def _remove_common_prefixes(self, text: str) -> str:
+        """
+        Args:
+            text (str): answer text potentially starting with a prefix like "The answer is:".
+
+        Returns:
+            str: text with known prefixes stripped.
+        """
         result = text
         for pattern in self.PREFIX_PATTERNS:
             result = re.sub(pattern, "", result, flags=re.IGNORECASE)
         return result.strip()
 
     @staticmethod
-    def _strip_quotes(text):
+    def _strip_quotes(text: str) -> str:
+        """
+        Args:
+            text (str): text potentially wrapped in matching quotes.
+
+        Returns:
+            str: text with outer quotes removed if present.
+        """
         if len(text) >= 2:
             if (text[0] == '"' and text[-1] == '"') or \
                (text[0] == "'" and text[-1] == "'"):
@@ -158,14 +223,30 @@ class AnswerProcessor:
         return text
 
     @staticmethod
-    def _normalize(text):
+    def _normalize(text: str) -> str:
+        """Lowercase, remove punctuation, and collapse whitespace.
+
+        Args:
+            text (str): raw text.
+
+        Returns:
+            str: normalized text.
+        """
         text = text.lower()
         text = text.translate(str.maketrans("", "", string.punctuation))
         return " ".join(text.split())
 
-    def _is_grounded_in_context(self, answer, context):
+    def _is_grounded_in_context(self, answer: str, context: str) -> bool:
         """Check that the answer actually comes from the context (not hallucinated).
-        First tries exact substring match, then falls back to word-overlap ratio."""
+        First tries exact substring match, then falls back to word-overlap ratio.
+
+        Args:
+            answer (str): cleaned candidate answer.
+            context (str): the original context passage.
+
+        Returns:
+            bool: True if the answer is grounded in the context.
+        """
         norm_answer = self._normalize(answer)
         norm_context = self._normalize(context)
 
@@ -181,9 +262,17 @@ class AnswerProcessor:
         matched = sum(1 for w in content_words if w in norm_context)
         return matched / len(content_words) >= 0.5
 
-    def process(self, raw_model_output, context):
+    def process(self, raw_model_output: str, context: str) -> str:
         """Clean raw LLM output into a final answer or NO_ANSWER_MARKER.
-        Pipeline: detect no-answer → strip prefixes/quotes → verify grounding."""
+        Pipeline: detect no-answer -> strip prefixes/quotes -> verify grounding.
+
+        Args:
+            raw_model_output (str): raw text generated by the LLM.
+            context (str): the original context passage.
+
+        Returns:
+            str: cleaned answer string, or NO_ANSWER_MARKER if unanswerable.
+        """
         text = raw_model_output.strip()
         first_line = text.split("\n")[0].strip()
 
@@ -274,8 +363,16 @@ class PromptBuilder:
         },
     ]
 
-    def build_messages(self, context, question):
-        """Assemble a chat-format prompt: system instruction + few-shot examples + actual query."""
+    def build_messages(self, context: str, question: str) -> List[Dict[str, str]]:
+        """Assemble a chat-format prompt: system instruction + few-shot examples + actual query.
+
+        Args:
+            context (str): the context passage for the question.
+            question (str): the question to answer.
+
+        Returns:
+            list[dict[str, str]]: list of chat messages with 'role' and 'content' keys.
+        """
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
 
         for example in self.FEW_SHOT_EXAMPLES:
@@ -303,7 +400,11 @@ class PromptBuilder:
 class ModelManager:
     """Responsible for loading the LLM and running inference (single + batch)."""
 
-    def __init__(self, model_name='meta-llama/Llama-3.2-3B-Instruct'):
+    def __init__(self, model_name: str = 'meta-llama/Llama-3.2-3B-Instruct') -> None:
+        """
+        Args:
+            model_name (str): HuggingFace model identifier to load.
+        """
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, token=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name, dtype=torch.float16, token=True
@@ -311,8 +412,15 @@ class ModelManager:
         self.model.config.pad_token_id = self.tokenizer.eos_token_id
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-    def generate_single(self, messages):
-        """Generate a response for a single chat-format message list (no confidence scores)."""
+    def generate_single(self, messages: List[Dict[str, str]]) -> str:
+        """Generate a response for a single chat-format message list (no confidence scores).
+
+        Args:
+            messages (list[dict[str, str]]): chat messages with 'role' and 'content' keys.
+
+        Returns:
+            str: decoded model output text.
+        """
         prompt_text = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False
         )
@@ -331,9 +439,16 @@ class ModelManager:
         new_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-    def generate_batch(self, messages_list):
-        """Generate responses for a batch of prompts. Returns (texts, confidences).
-        Uses left-padding so shorter prompts align correctly in the batch."""
+    def generate_batch(self, messages_list: List[List[Dict[str, str]]]) -> Tuple[List[str], List[float]]:
+        """Generate responses for a batch of prompts.
+        Uses left-padding so shorter prompts align correctly in the batch.
+
+        Args:
+            messages_list (list[list[dict[str, str]]]): list of chat message lists.
+
+        Returns:
+            tuple[list[str], list[float]]: (decoded texts, confidence scores).
+        """
         prompt_texts = [
             self.tokenizer.apply_chat_template(
                 msgs, add_generation_prompt=True, tokenize=False
@@ -383,17 +498,38 @@ class ModelManager:
 class ExtractionAgent:
     """First stage: runs the LLM call and gathers evidence signals."""
 
-    def __init__(self, model_manager, prompt_builder, answer_processor,
-                 confidence_scorer, span_matcher):
+    def __init__(self, model_manager: 'ModelManager', prompt_builder: 'PromptBuilder',
+                 answer_processor: 'AnswerProcessor', confidence_scorer: 'ConfidenceScorer',
+                 span_matcher: 'SpanMatcher') -> None:
+        """
+        Args:
+            model_manager (ModelManager): handles LLM inference.
+            prompt_builder (PromptBuilder): constructs chat-format prompts.
+            answer_processor (AnswerProcessor): cleans and validates raw answers.
+            confidence_scorer (ConfidenceScorer): evaluates generation confidence.
+            span_matcher (SpanMatcher): finds matching spans in context.
+        """
         self.model_manager = model_manager
         self.prompt_builder = prompt_builder
         self.answer_processor = answer_processor
         self.confidence_scorer = confidence_scorer
         self.span_matcher = span_matcher
 
-    def _collect_observation(self, raw_answer, context, confidence):
+    def _collect_observation(self, raw_answer: str, context: str,
+                                confidence: float) -> Dict[str, Any]:
         """Gather all evidence signals for the AnalysisAgent to reason over:
-        cleaned answer, confidence, grounding check, and span matching."""
+        cleaned answer, confidence, grounding check, and span matching.
+
+        Args:
+            raw_answer (str): raw text generated by the LLM.
+            context (str): the original context passage.
+            confidence (float): avg log-probability from the generation step.
+
+        Returns:
+            dict[str, any]: observation with keys: raw_answer, confidence, is_confident,
+                no_answer_detected, grounded_in_context, best_span, snapped_span,
+                similarity_ratio, cleaned_answer.
+        """
         cleaned_answer = self.answer_processor.process(raw_answer, context)
         no_answer_detected = self.answer_processor._is_no_answer_response(raw_answer)
 
@@ -430,8 +566,16 @@ class ExtractionAgent:
             "cleaned_answer": cleaned_answer,
         }
 
-    def extract_single(self, context, question):
-        """Run the first LLM call and return an observation dict with all evidence signals."""
+    def extract_single(self, context: str, question: str) -> Dict[str, Any]:
+        """Run the first LLM call and return an observation dict with all evidence signals.
+
+        Args:
+            context (str): the context passage.
+            question (str): the question to answer.
+
+        Returns:
+            dict[str, any]: observation dict (see _collect_observation).
+        """
         messages = self.prompt_builder.build_messages(context, question)
         raw_answers, confidences = self.model_manager.generate_batch([messages])
         return self._collect_observation(raw_answers[0], context, confidences[0])
@@ -460,11 +604,25 @@ class AnalysisAgent:
         "5. Respond ONLY with the final answer text or NO ANSWER — no explanations."
     )
 
-    def __init__(self, model_manager):
+    def __init__(self, model_manager: 'ModelManager') -> None:
+        """
+        Args:
+            model_manager (ModelManager): handles LLM inference.
+        """
         self.model_manager = model_manager
 
-    def _build_analysis_prompt(self, context, question, observation):
-        """Format the extraction evidence into a structured prompt for the second LLM call."""
+    def _build_analysis_prompt(self, context: str, question: str,
+                                observation: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Format the extraction evidence into a structured prompt for the second LLM call.
+
+        Args:
+            context (str): the original context passage.
+            question (str): the question being answered.
+            observation (dict[str, any]): evidence dict from ExtractionAgent.
+
+        Returns:
+            list[dict[str, str]]: chat messages for the analysis LLM call.
+        """
         no_answer_str = "Yes" if observation["no_answer_detected"] else "No"
         grounded_str = "Yes" if observation["grounded_in_context"] else "No"
         confident_str = "Yes" if observation["is_confident"] else "No (below threshold — likely hallucination)"
@@ -493,8 +651,18 @@ class AnalysisAgent:
             {"role": "user", "content": user_content},
         ]
 
-    def analyze_single(self, context, question, observation):
-        """Run the second LLM call to make the final accept/reject decision."""
+    def analyze_single(self, context: str, question: str,
+                        observation: Dict[str, Any]) -> str:
+        """Run the second LLM call to make the final accept/reject decision.
+
+        Args:
+            context (str): the original context passage.
+            question (str): the question being answered.
+            observation (dict[str, any]): evidence dict from ExtractionAgent.
+
+        Returns:
+            str: final answer string, or NO_ANSWER_MARKER.
+        """
         messages = self._build_analysis_prompt(context, question, observation)
         raw_outputs, _ = self.model_manager.generate_batch([messages])
 
@@ -517,16 +685,40 @@ class SquadQARunner:
         2. AnalysisAgent — second LLM call for final decision
     """
 
-    def __init__(self, model_manager, extraction_agent, analysis_agent):
+    def __init__(self, model_manager: 'ModelManager', extraction_agent: 'ExtractionAgent',
+                 analysis_agent: 'AnalysisAgent') -> None:
+        """
+        Args:
+            model_manager (ModelManager): handles LLM inference.
+            extraction_agent (ExtractionAgent): first-stage agent.
+            analysis_agent (AnalysisAgent): second-stage agent.
+        """
         self.model_manager = model_manager
         self.extraction_agent = extraction_agent
         self.analysis_agent = analysis_agent
 
-    def answer_single(self, context, question):
+    def answer_single(self, context: str, question: str) -> str:
+        """Run the full two-agent pipeline for a single question.
+
+        Args:
+            context (str): the context passage.
+            question (str): the question to answer.
+
+        Returns:
+            str: final answer or NO_ANSWER_MARKER.
+        """
         observation = self.extraction_agent.extract_single(context, question)
         return self.analysis_agent.analyze_single(context, question, observation)
 
-    def run(self, data_filename):
+    def run(self, data_filename: str) -> str:
+        """Run the pipeline on all rows in a CSV file.
+
+        Args:
+            data_filename (str): path to CSV with 'context' and 'question' columns.
+
+        Returns:
+            str: path to the output CSV with a 'final answer' column added.
+        """
         df = pd.read_csv(data_filename)
         total = len(df)
         final_answers = []
@@ -573,15 +765,37 @@ tokenizer = model_manager.tokenizer
 model = model_manager.model
 
 
-def generate_answer(messages):
+def generate_answer(messages: List[Dict[str, str]]) -> str:
+    """
+    Args:
+        messages (list[dict[str, str]]): chat messages with 'role' and 'content' keys.
+
+    Returns:
+        str: decoded model output text.
+    """
     return model_manager.generate_single(messages)
 
 
-def answer_single_question(context, question):
+def answer_single_question(context: str, question: str) -> str:
+    """
+    Args:
+        context (str): the context passage.
+        question (str): the question to answer.
+
+    Returns:
+        str: final answer or NO_ANSWER_MARKER.
+    """
     return runner.answer_single(context, question)
 
 
-def squad_qa(data_filename):
+def squad_qa(data_filename: str) -> str:
+    """
+    Args:
+        data_filename (str): path to CSV with 'context' and 'question' columns.
+
+    Returns:
+        str: path to the output results CSV.
+    """
     return runner.run(data_filename)
 
 

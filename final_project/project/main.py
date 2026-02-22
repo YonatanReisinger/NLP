@@ -10,6 +10,8 @@ from utils.prompt_builder import PromptBuilder
 from utils.answer_processor import AnswerProcessor
 from utils.confidence_scorer import ConfidenceScorer
 from utils.span_matcher import SpanMatcher
+from utils.extraction_agent import ExtractionAgent
+from utils.analysis_agent import AnalysisAgent
 
 
 class ModelManager:
@@ -108,61 +110,32 @@ class ModelManager:
 
 
 class SquadQARunner:
-    """Orchestrates the full QA pipeline.
+    """Orchestrates the two-agent QA pipeline.
 
-    Combines four techniques beyond basic prompting:
-        1. Batched parallel inference (ModelManager)
-        2. Logit confidence scoring (ConfidenceScorer) — reject
-           low-confidence answers as likely hallucinations
-        3. Fuzzy span matching (SpanMatcher) — snap answers to the
-           closest actual context substring, fixing extraction errors
-        4. Rule-based post-processing (AnswerProcessor) — no-answer
-           detection, prefix cleanup, grounding verification
+    For each question, runs the full pipeline sequentially:
+        1. ExtractionAgent — runs the first LLM call, collects structured
+           observations (raw answer, confidence, grounding, span match).
+        2. AnalysisAgent — receives the context, question, and observations,
+           makes a second LLM call to decide the final answer.
+
+    Both agents share the same ModelManager (single model load).
     """
 
-    BATCH_SIZE = 8
-
-    def __init__(self, model_manager, prompt_builder, answer_processor,
-                 confidence_scorer, span_matcher):
+    def __init__(self, model_manager, extraction_agent, analysis_agent):
         self.model_manager = model_manager
-        self.prompt_builder = prompt_builder
-        self.answer_processor = answer_processor
-        self.confidence_scorer = confidence_scorer
-        self.span_matcher = span_matcher
+        self.extraction_agent = extraction_agent
+        self.analysis_agent = analysis_agent
 
     def answer_single(self, context, question):
-        """Process one (context, question) pair end-to-end."""
-        messages = self.prompt_builder.build_messages(context, question)
-        raw_answer = self.model_manager.generate_single(messages)
-        return self.answer_processor.process(raw_answer, context)
-
-    def _process_one(self, raw_answer, context, confidence):
-        """Apply the full post-processing pipeline to a single item.
-
-        Steps:
-            1. AnswerProcessor — regex cleanup + basic grounding check.
-            2. ConfidenceScorer — reject if log-prob below threshold.
-            3. SpanMatcher — snap answer to nearest context span, or
-               reject if no close match exists.
-        """
-        # Step 1: standard cleanup (no-answer detection, prefix removal, …)
-        answer = self.answer_processor.process(raw_answer, context)
-        if answer == NO_ANSWER_MARKER:
-            return answer
-
-        # Step 2: confidence gate
-        if not self.confidence_scorer.is_confident(confidence):
-            return NO_ANSWER_MARKER
-
-        # Step 3: snap to the closest real context span
-        snapped = self.span_matcher.snap_or_reject(answer, context)
-        if snapped is None:
-            return NO_ANSWER_MARKER
-
-        return snapped
+        """Process one (context, question) pair through both agents."""
+        observation = self.extraction_agent.extract_single(context, question)
+        return self.analysis_agent.analyze_single(context, question, observation)
 
     def run(self, data_filename):
-        """Solve an entire SQuAD 2.0 CSV file using batched inference.
+        """Solve an entire SQuAD 2.0 CSV file using the two-agent pipeline.
+
+        Each question goes through the full pipeline (extract → analyze)
+        before moving to the next.
 
         Returns:
             str: Path to the results CSV.
@@ -171,30 +144,18 @@ class SquadQARunner:
         total = len(df)
         final_answers = []
 
-        rows = list(df.iterrows())
+        for idx, row in df.iterrows():
+            context = row["context"]
+            question = row["question"]
 
-        for batch_start in range(0, total, self.BATCH_SIZE):
-            batch_rows = rows[batch_start: batch_start + self.BATCH_SIZE]
+            # 1. Extraction Agent: first LLM call + evidence gathering
+            observation = self.extraction_agent.extract_single(context, question)
 
-            # 1. Build prompts
-            messages_list = [
-                self.prompt_builder.build_messages(row["context"], row["question"])
-                for _, row in batch_rows
-            ]
-            contexts = [row["context"] for _, row in batch_rows]
+            # 2. Analysis Agent: second LLM call for final decision
+            answer = self.analysis_agent.analyze_single(context, question, observation)
 
-            # 2. Batched generation → texts + confidences
-            raw_answers, confidences = self.model_manager.generate_batch(
-                messages_list
-            )
-
-            # 3. Full post-processing pipeline per item
-            for i, raw_answer in enumerate(raw_answers):
-                answer = self._process_one(
-                    raw_answer, contexts[i], confidences[i]
-                )
-                final_answers.append(answer)
-                print(f"  [{len(final_answers)}/{total}] {answer[:60]}")
+            final_answers.append(answer)
+            print(f"  [{len(final_answers)}/{total}] {answer[:60]}")
 
         df["final answer"] = final_answers
 
@@ -211,10 +172,12 @@ answer_processor = AnswerProcessor()
 confidence_scorer = ConfidenceScorer(no_answer_threshold=-1.0)
 span_matcher = SpanMatcher(min_similarity=0.6)
 
-runner = SquadQARunner(
-    model_manager, prompt_builder, answer_processor,
-    confidence_scorer, span_matcher,
+extraction_agent = ExtractionAgent(
+    model_manager, prompt_builder, answer_processor, span_matcher,
 )
+analysis_agent = AnalysisAgent(model_manager)
+
+runner = SquadQARunner(model_manager, extraction_agent, analysis_agent)
 
 # Keep legacy references so nothing else breaks
 model_name = 'meta-llama/Llama-3.2-3B-Instruct'

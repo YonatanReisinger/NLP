@@ -198,20 +198,30 @@ class PromptBuilder:
     """Responsible for constructing chat-format prompts for the QA model."""
 
     SYSTEM_PROMPT = (
-        "You are an extractive question answering system. "
-        "Given a context passage and a question, extract the answer directly from the context.\n\n"
-        "RULES:\n"
-        "1. The answer MUST be a short text span taken DIRECTLY from the context — copy it exactly.\n"
-        "2. Do NOT paraphrase, rephrase, or generate text that does not appear in the context.\n"
-        "3. If the answer to the question is NOT explicitly stated in the context, "
+        "🔍 You are an EXTRACTIVE question answering system.\n"
+        "Your task: given a context passage and a question, extract the answer DIRECTLY from the context.\n\n"
+        "📖 BACKGROUND:\n"
+        "You are part of a SQuAD 2.0 evaluation pipeline. SQuAD 2.0 includes both answerable and "
+        "unanswerable questions. For answerable questions, the correct answer is always a literal "
+        "text span copied from the context. For unanswerable questions, the correct response is NO ANSWER. "
+        "Your job is to distinguish between these two cases with high precision.\n\n"
+        "⚠️ RULES:\n"
+        "1️⃣ The answer MUST be a short text span taken DIRECTLY from the context — copy it exactly, "
+        "preserving the original wording, capitalization, and phrasing.\n"
+        "2️⃣ Do NOT paraphrase, rephrase, summarize, or generate text that does not appear verbatim in the context.\n"
+        "3️⃣ If the answer to the question is NOT explicitly stated in the context, "
         "respond with exactly: NO ANSWER\n"
-        "4. Do NOT guess, infer, or assume anything beyond what is written.\n"
-        "5. Even if the question is related to the topic, if the specific answer is not in the "
-        "context, say NO ANSWER.\n"
-        "6. Respond ONLY with the extracted answer or NO ANSWER — no explanations, no extra words."
+        "4️⃣ Do NOT guess, infer, or assume anything beyond what is written. Do NOT use world knowledge.\n"
+        "5️⃣ Even if the question is related to the topic, if the SPECIFIC answer is not in the "
+        "context, say NO ANSWER. A question about a related but different detail is unanswerable.\n"
+        "6️⃣ Watch out for tricky questions that swap subjects, change dates, or ask about entities "
+        "not mentioned — these are designed to be unanswerable traps.\n"
+        "7️⃣ Respond ONLY with the extracted answer or NO ANSWER — no explanations, no extra words, "
+        "no prefixes like 'The answer is'."
     )
 
     FEW_SHOT_EXAMPLES = [
+        # --- Pair 1: Turing machines (answerable vs. subject swap trap) ---
         {
             "context": (
                 "Many types of Turing machines are used to define complexity classes, such as "
@@ -234,6 +244,7 @@ class PromptBuilder:
             "question": "What machines are not equally powerful in principle?",
             "answer": "NO ANSWER",
         },
+        # --- Pair 2: Scottish history (answerable vs. wrong-subject trap) ---
         {
             "context": (
                 "King David I of Scotland, whose elder brother Alexander I had married "
@@ -252,6 +263,48 @@ class PromptBuilder:
                 '"Davidian Revolution".'
             ),
             "question": "Who did King David I of Scotland marry?",
+            "answer": "NO ANSWER",
+        },
+        # --- Pair 3: Numerical / date extraction (answerable vs. different-detail trap) ---
+        {
+            "context": (
+                "The Normans were the people who in the 10th and 11th centuries gave their "
+                "name to Normandy, a region in France. They were descended from Norse raiders "
+                "and pirates from Denmark, Iceland and Norway who, under their leader Rollo, "
+                "agreed to swear fealty to King Charles III of West Francia."
+            ),
+            "question": "In what century did the Normans first give their name to Normandy?",
+            "answer": "10th and 11th centuries",
+        },
+        {
+            "context": (
+                "The Normans were the people who in the 10th and 11th centuries gave their "
+                "name to Normandy, a region in France. They were descended from Norse raiders "
+                "and pirates from Denmark, Iceland and Norway who, under their leader Rollo, "
+                "agreed to swear fealty to King Charles III of West Francia."
+            ),
+            "question": "When did Rollo swear fealty to King Charles III?",
+            "answer": "NO ANSWER",
+        },
+        # --- Pair 4: Science / oxygen (answerable vs. unsupported claim trap) ---
+        {
+            "context": (
+                "Oxygen is a chemical element with symbol O and atomic number 8. It is a member "
+                "of the chalcogen group on the periodic table, a highly reactive nonmetal, and an "
+                "oxidizing agent that readily forms oxides with most elements as well as with other "
+                "compounds."
+            ),
+            "question": "What is the atomic number of oxygen?",
+            "answer": "8",
+        },
+        {
+            "context": (
+                "Oxygen is a chemical element with symbol O and atomic number 8. It is a member "
+                "of the chalcogen group on the periodic table, a highly reactive nonmetal, and an "
+                "oxidizing agent that readily forms oxides with most elements as well as with other "
+                "compounds."
+            ),
+            "question": "Who discovered oxygen?",
             "answer": "NO ANSWER",
         },
     ]
@@ -419,20 +472,111 @@ class AnalysisAgent:
     """Second stage: decides the final answer from extraction evidence."""
 
     SYSTEM_PROMPT = (
-        "You are an analysis agent for a question-answering system. "
-        "You receive a question, its context passage, and evidence signals from an extraction step. "
-        "Your job is to decide the FINAL answer.\n\n"
-        "RULES:\n"
-        "1. If the extracted answer looks correct and is well-supported by the context, output it.\n"
-        "2. If a better matching span was found in the context, prefer the matched span.\n"
-        "3. If the evidence suggests the question CANNOT be answered from the context, output exactly: NO ANSWER\n"
-        "4. Pay close attention to these NO ANSWER signals:\n"
-        "   - The extraction step detected no-answer patterns in the model output\n"
-        "   - Low confidence score (below -1.0 is suspicious, below -2.0 is very low)\n"
-        "   - The answer is NOT grounded in the context\n"
-        "   - No good span match was found (low similarity)\n"
-        "5. Respond ONLY with the final answer text or NO ANSWER — no explanations."
+        "🧠 You are the ANALYSIS AGENT in a two-stage question-answering pipeline.\n"
+        "You receive a question, its context passage, and detailed evidence signals from an "
+        "extraction step. Your job is to make the FINAL decision on the answer.\n\n"
+        "📖 BACKGROUND:\n"
+        "This is a SQuAD 2.0 evaluation task. About 30-50% of questions are UNANSWERABLE — "
+        "designed to look plausible but their answers are NOT in the context. The extraction agent "
+        "sometimes hallucinates answers for unanswerable questions, so you must critically verify "
+        "every piece of evidence before accepting an answer. Your role is quality control.\n\n"
+        "📊 UNDERSTANDING THE EVIDENCE:\n"
+        "- Confidence Score: log-probability of generated tokens (range: -inf to 0). "
+        "Scores above -0.5 are high confidence; -0.5 to -1.0 is moderate; below -1.0 is suspicious; "
+        "below -2.0 is very low and likely hallucinated.\n"
+        "- Grounded in Context: whether the answer's content words appear in the passage. "
+        "If 'No', the model likely fabricated the answer.\n"
+        "- Similarity Ratio: how well the extracted answer matches a span in the context "
+        "(0.0 to 1.0). Above 0.8 is strong; 0.6-0.8 is acceptable; below 0.6 is weak.\n"
+        "- Snapped Span: the closest matching text span from the context. If '(rejected)', "
+        "the answer doesn't appear in the passage.\n\n"
+        "⚠️ RULES:\n"
+        "1️⃣ If the extracted answer is well-supported (high confidence, grounded, good span match), output it.\n"
+        "2️⃣ If the snapped span is a better or cleaner match, prefer it over the raw extracted answer.\n"
+        "3️⃣ Output exactly NO ANSWER when ANY of these red flags appear:\n"
+        "   🚩 No-answer signals were detected in the extraction output\n"
+        "   🚩 Confidence score is below -1.0 (especially below -2.0)\n"
+        "   🚩 The answer is NOT grounded in the context\n"
+        "   🚩 No good span match found (similarity below 0.6) AND the span was rejected\n"
+        "   🚩 The question asks about something not mentioned in the context\n"
+        "4️⃣ When multiple red flags appear together, STRONGLY prefer NO ANSWER.\n"
+        "5️⃣ Respond ONLY with the final answer text or NO ANSWER — no explanations, no extra words."
     )
+
+    FEW_SHOT_ANALYSIS = [
+        # Example 1: Strong evidence → accept extracted answer
+        {
+            "evidence": (
+                "Question: What is the atomic number of oxygen?\n"
+                "Context: Oxygen is a chemical element with symbol O and atomic number 8.\n\n"
+                "--- Extraction Evidence ---\n"
+                "Extracted Answer: 8\n"
+                "Confidence Score: -0.12 (range: -inf to 0, higher is better)\n"
+                "Passes Confidence Threshold: Yes\n"
+                "Grounded in Context: Yes\n"
+                "Best Matching Span: 8 (similarity: 1.00)\n"
+                "Snapped Span (after snap-or-reject): 8\n"
+                "No-Answer Signals Detected: No\n\n"
+                "Decide: Should the final answer be the extracted answer, the matched span, or NO ANSWER?"
+            ),
+            "decision": "8",
+        },
+        # Example 2: Multiple red flags → NO ANSWER
+        {
+            "evidence": (
+                "Question: Who discovered oxygen?\n"
+                "Context: Oxygen is a chemical element with symbol O and atomic number 8. It is a member "
+                "of the chalcogen group on the periodic table.\n\n"
+                "--- Extraction Evidence ---\n"
+                "Extracted Answer: Joseph Priestley\n"
+                "Confidence Score: -2.45 (range: -inf to 0, higher is better)\n"
+                "Passes Confidence Threshold: No (below threshold — likely hallucination)\n"
+                "Grounded in Context: No\n"
+                "Best Matching Span: (none) (similarity: 0.18)\n"
+                "Snapped Span (after snap-or-reject): (rejected — no close match)\n"
+                "No-Answer Signals Detected: No\n\n"
+                "Decide: Should the final answer be the extracted answer, the matched span, or NO ANSWER?"
+            ),
+            "decision": "NO ANSWER",
+        },
+        # Example 3: Snapped span is better → prefer it
+        {
+            "evidence": (
+                "Question: In what century did the Normans first give their name to Normandy?\n"
+                "Context: The Normans were the people who in the 10th and 11th centuries gave their "
+                "name to Normandy, a region in France.\n\n"
+                "--- Extraction Evidence ---\n"
+                "Extracted Answer: the 10th and 11th centuries\n"
+                "Confidence Score: -0.34 (range: -inf to 0, higher is better)\n"
+                "Passes Confidence Threshold: Yes\n"
+                "Grounded in Context: Yes\n"
+                "Best Matching Span: 10th and 11th centuries (similarity: 0.88)\n"
+                "Snapped Span (after snap-or-reject): 10th and 11th centuries\n"
+                "No-Answer Signals Detected: No\n\n"
+                "Decide: Should the final answer be the extracted answer, the matched span, or NO ANSWER?"
+            ),
+            "decision": "10th and 11th centuries",
+        },
+        # Example 4: No-answer detected + low confidence → NO ANSWER
+        {
+            "evidence": (
+                "Question: When did Rollo swear fealty to King Charles III?\n"
+                "Context: They were descended from Norse raiders and pirates from Denmark, Iceland and "
+                "Norway who, under their leader Rollo, agreed to swear fealty to King Charles III of "
+                "West Francia.\n\n"
+                "--- Extraction Evidence ---\n"
+                "Extracted Answer: The context does not mention a specific date.\n"
+                "Confidence Score: -1.67 (range: -inf to 0, higher is better)\n"
+                "Passes Confidence Threshold: No (below threshold — likely hallucination)\n"
+                "Grounded in Context: No\n"
+                "Best Matching Span: (none) (similarity: 0.12)\n"
+                "Snapped Span (after snap-or-reject): (rejected — no close match)\n"
+                "No-Answer Signals Detected: Yes\n\n"
+                "Decide: Should the final answer be the extracted answer, the matched span, or NO ANSWER?"
+            ),
+            "decision": "NO ANSWER",
+        },
+    ]
 
     def __init__(self, model_manager):
         self.model_manager = model_manager
@@ -445,6 +589,13 @@ class AnalysisAgent:
         snapped_str = observation["snapped_span"] if observation["snapped_span"] else "(rejected — no close match)"
         ratio_str = f"{observation['similarity_ratio']:.2f}"
         confidence_str = f"{observation['confidence']:.2f}"
+
+        messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+
+        # Add few-shot examples
+        for example in self.FEW_SHOT_ANALYSIS:
+            messages.append({"role": "user", "content": example["evidence"]})
+            messages.append({"role": "assistant", "content": example["decision"]})
 
         user_content = (
             f"Question: {question}\n"
@@ -461,10 +612,8 @@ class AnalysisAgent:
             f"the matched span, or NO ANSWER?"
         )
 
-        return [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ]
+        messages.append({"role": "user", "content": user_content})
+        return messages
 
     def analyze_single(self, context, question, observation):
         messages = self._build_analysis_prompt(context, question, observation)
